@@ -31,10 +31,19 @@ target_compile_definitions(BedrockUtils PRIVATE
 )
 
 if(MSVC)
+    # Replace /EHsc (C++ EH only) with /EHa (async SEH + C++ EH).
+    # This is required because we mix __try/__except with C++ objects that have
+    # destructors (std::string, std::lock_guard, etc.) in the same functions.
+    # Without /EHa, MSVC emits C2712: Cannot use __try in functions that require
+    # object unwinding. clang-cl does not enforce this restriction.
+    string(REPLACE "/EHsc" "/EHa" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    string(REPLACE "/EHsc" "/EHa" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+    string(REPLACE "/EHsc" "/EHa" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        target_compile_options(BedrockUtils PRIVATE /W4 /permissive- -Qunused-arguments -Wno-invalid-offsetof)
+        target_compile_options(BedrockUtils PRIVATE /EHa /W4 /permissive- -Qunused-arguments -Wno-invalid-offsetof)
     else()
-        target_compile_options(BedrockUtils PRIVATE /W4 /MP /permissive-)
+        target_compile_options(BedrockUtils PRIVATE /EHa /W4 /MP /permissive-)
     endif()
     target_link_options(BedrockUtils PRIVATE /SUBSYSTEM:WINDOWS)
 endif()
