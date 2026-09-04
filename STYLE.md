@@ -193,3 +193,47 @@ This repository (`BedrockUtils`) follows strict C++20 conventions and design pri
   SDK::Chat::moduleNotify(name(), "Toggled to new mode.");
   ```
   Only use raw `SDK::Chat::send(...)` for custom multi-line formatted tables (such as the `//modules` roster).
+
+---
+
+## 10. Commit Message Style
+
+Use the **Conventional Commits** format. This keeps the history readable and makes it easy to understand what changed and why at a glance.
+
+```
+<type>(<scope>): <short summary>
+```
+
+- The summary should be lowercase, imperative, and under 72 characters.
+- The scope is optional but encouraged — use the component or module name.
+- Add a body (blank line after summary) if the change needs more context.
+
+### Types
+
+| Type | When to use |
+|---|---|
+| `feat` | A new feature or module |
+| `fix` | A bug fix |
+| `refactor` | Code restructured without changing behavior |
+| `chore` | Build system, toolchain, CI, or dependency changes |
+| `docs` | Documentation only |
+| `style` | Formatting, brace style, naming — no logic changes |
+| `perf` | Performance improvement |
+| `revert` | Reverting a previous commit |
+
+### Examples
+
+```
+feat(core): add CommandDispatcher double-slash interception
+fix(interceptor): guard against null clientCb before inbound flush
+refactor(pipeline): replace linear scan with O(1) indexed dispatch
+chore(ci): add windows-latest build workflow
+docs: add STYLE.md commit message guidelines
+style(CoreCommands): fix Allman brace style on empty catch blocks
+```
+
+### Rules
+
+- **Never** use vague messages like `fix stuff`, `update`, or `wip`.
+- If a commit fixes a specific crash or regression, say what it was: `fix(chat): prevent ACCESS_VIOLATION when player not yet spawned`.
+- Breaking changes should be noted in the body: `BREAKING CHANGE: Module::onLoad() no longer receives PacketSender.`

@@ -10,6 +10,7 @@ jobs:
   build:
     name: Build Windows x64 DLL
     runs-on: windows-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -21,17 +22,18 @@ jobs:
         with:
           arch: x64
 
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
 
-      - name: Build BedrockUtils
-        run: cmake --build build --config Release --parallel
+      - name: Configure CMake
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
 
       - name: Upload DLL Artifact
         uses: actions/upload-artifact@v4
         with:
           name: BedrockUtils-x64
-          path: |
-            build/Release/BedrockUtils.dll
-            build/BedrockUtils.dll
+          path: build/BedrockUtils.dll
           if-no-files-found: error
