@@ -26,7 +26,15 @@ jobs:
         uses: seanmiddleditch/gha-setup-ninja@v5
 
       - name: Configure CMake
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        # Use clang-cl + lld-link to match the local Linux cross-compile toolchain.
+        # ilammy/msvc-dev-cmd provides the Windows SDK and CRT headers/libs that
+        # clang-cl needs. LLVM is pre-installed on windows-latest.
+        run: |
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
+            -DCMAKE_LINKER=lld-link
 
       - name: Build
         run: cmake --build build --parallel
