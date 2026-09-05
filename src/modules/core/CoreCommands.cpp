@@ -224,30 +224,39 @@ void CoreCommands::onLoad()
     registerCommand("players", "Dump all tracked players to log and show summary", playersCb);
 
 
-    // Chat command: test chat message with author name
+    // Chat command: sends outbound chat to server if args provided; injects test inbound if empty
     CommandCallback chatCb = [](const CommandArgs& args)
     {
-        std::string author = "BedrockBot";
-        std::string message = "This is a test chat message with an author name!";
-        if (!args.empty())
+        if (args.empty())
         {
-            author = std::string(args.get(0));
-            if (args.size() > 1)
-            {
-                message.clear();
-                for (size_t i = 1; i < args.size(); ++i)
-                {
-                    if (i > 1)
-                    {
-                        message += " ";
-                    }
-                    message += std::string(args.get(i));
-                }
-            }
+            std::string author = "BedrockBot";
+            std::string message = "This is a test chat message with an author name!";
+            SDK::Chat::sendChat(author, message);
+            SDK::Chat::notify("Injected test inbound chat into local client.");
+            return;
         }
-        SDK::Chat::sendChat(author, message);
+
+        std::string message;
+        for (size_t i = 0; i < args.size(); ++i)
+        {
+            if (i > 0)
+            {
+                message += " ";
+            }
+            message += std::string(args.get(i));
+        }
+
+        if (SDK::Chat::sendToServer(message))
+        {
+            std::string author = SDK::Game::getLocalPlayerName();
+            SDK::Chat::notify(std::format("Sent outbound chat to server: §f\"{}\"§7 (as §e{}§7)", message, author.empty() ? "you" : author));
+        }
+        else
+        {
+            SDK::Chat::error("Failed to send outbound chat (PacketSender not available).");
+        }
     };
-    registerCommand("chat", "Test chat message with author name", chatCb);
+    registerCommand("chat", "Send outbound chat to server, or inject test inbound if no args", chatCb);
 
     // Spawn test sheep entity
     CommandCallback spawnCb = [](const CommandArgs&)

@@ -68,6 +68,39 @@ inline void sendChat(std::string_view author, std::string_view message)
     PacketInterceptor::get().injectInbound(pkt);
 }
 
+// Sends an outbound TextPacket directly to the server (broadcasting to other players)
+inline bool sendToServer(std::string_view message)
+{
+    SDK::PacketSender* sender = SDK::Game::sender();
+    if (!sender)
+    {
+        SDK::Log::log("[Chat] sendToServer: PacketSender not available!");
+        return false;
+    }
+
+    std::shared_ptr<Packet> pkt = Factory::createPacket(PacketID::TEXT);
+    if (!pkt)
+    {
+        SDK::Log::log("[Chat] sendToServer: Factory::createPacket(TEXT) failed!");
+        return false;
+    }
+
+    TextPacket* tp = static_cast<TextPacket*>(pkt.get());
+    tp->type = TextPacketType::CHAT;
+    tp->needsTranslation = false;
+    tp->sourceName = SDK::Game::getLocalPlayerName();
+    tp->xuid = SDK::Game::getLocalPlayerXuid();
+    tp->platformChatId.clear();
+    tp->message = message;
+    tp->variantIndex = 1;
+
+    SDK::Log::log("[Chat] Sending outbound TextPacket to server: \"{}\" (author=\"{}\", xuid=\"{}\")",
+        message, tp->sourceName.view(), tp->xuid.view());
+
+    sender->sendToServer(tp);
+    return true;
+}
+
 // Standard branded notification: §a§l[BedrockUtils]§r §7<message>
 inline void notify(std::string_view message)
 {
