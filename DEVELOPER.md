@@ -29,14 +29,29 @@ Internal technical documentation for project maintainers. Covers module creation
    - [Command Manager (`SDK::CommandManager`)](#sdkcommandmanager)
    - [Player Tracker (`SDK::PlayerTracker`)](#sdkplayertracker)
    - [Packet Dumper (`SDK::PacketDumper`)](#sdkpacketdumper)
-   - [HTTP and Async Services (`SDK::Http`, `SDK::Async`)](#sdkhttp-and-sdkasync)
+   - [HTTP Client (`SDK::Http`)](#sdkhttp)
+   - [Async Worker Pool (`SDK::Async`)](#sdkasync)
    - [Logging (`SDK::Log`)](#sdklog)
-   - [SafeString and Utility Helpers (`SDK::SafeString`)](#sdksafestring-and-utilities)
+   - [SafeString, PODVector, and Memory Helpers (`SDK::SafeString`)](#sdksafestring)
+   - [Chat Parser (`SDK::ChatUtils`)](#sdkchatutils)
+   - [JSON Utilities (`SDK::Json`)](#sdkjson)
 8. [Supported Packets and Memory Layouts](#8-supported-packets-and-memory-layouts)
+   - [Version Offset Notice](#version-offset-notice)
+   - [Base Packet Header](#base-packet-header)
    - [TextPacket (`0x09`)](#textpacket-0x09)
    - [CommandRequestPacket (`0x4D`)](#commandrequestpacket-0x4d)
    - [AddPlayerPacket (`0x0C`)](#addplayerpacket-0x0c)
+   - [AddActorPacket (`0x0D`)](#addactorpacket-0x0d)
+   - [RemoveActorPacket (`0x0E`)](#removeactorpacket-0x0e)
+   - [MovePlayerPacket (`0x13`)](#moveplayerpacket-0x13)
+   - [MoveActorAbsolutePacket (`0x12`)](#moveactorabsolutepacket-0x12)
+   - [MoveActorDeltaPacket (`0x6F`)](#moveactordeltapacket-0x6f)
    - [PlayerListPacket (`0x3F`)](#playerlistpacket-0x3f)
+   - [ModalFormRequestPacket (`0x64`)](#modalformrequestpacket-0x64)
+   - [ModalFormResponsePacket (`0x65`)](#modalformresponsepacket-0x65)
+   - [AvailableCommandsPacket (`0x4C`)](#availablecommandspacket-0x4c)
+   - [ChangeDimensionPacket (`0x3D`)](#changedimensionpacket-0x3d)
+   - [PlayStatusPacket (`0x02`)](#playstatuspacket-0x02)
 9. [Coding Style and Standards](#9-coding-style-and-standards)
 
 ---
@@ -597,84 +612,369 @@ Defined in `src/services/PacketDumper.h`. Provides real-time binary memory dumpi
 
 Dumps are formatted with 16-byte hex tables, ASCII text columns, and heuristic structure detectors (automatically highlighting `std::string`, `SafeString`, coordinates, and variant tags). Reports are written to `butils_dumper.log` located inside `%LOCALAPPDATA%\BedrockUtils\logs`.
 
-[Back to Top](#quick-navigation)
+#### Guide: Mapping an Unknown Packet
 
----
+This is the workflow for taking a packet you have never seen before and producing a working, fully typed C++ header for it.
 
-<a id="sdkhttp-and-sdkasync" name="sdkhttp-and-sdkasync"></a><a id="http-and-async-services-sdkhttp-sdkasync" name="http-and-async-services-sdkhttp-sdkasync"></a>
-### HTTP and Async Services (`SDK::Http`, `SDK::Async`)
+**Step 1: Identify the packet ID.**
 
-Defined in `src/sdk/Http.h` and `src/sdk/Async.h`.
+If you know the name (e.g. `TRANSFER`), look it up in `src/sdk/Packet.h` where all known IDs are enumerated in the `PacketID` enum. If you do not know the ID yet, enable verbose logging (`;;toggle verbose` or `SDK::Log::setVerbose(true)`) and watch `butils.log` for unhandled packet IDs flying past as you trigger the network event in-game.
 
-```cpp
-#include "sdk/Http.h"
-#include "sdk/Async.h"
+**Step 2: Arm the dumper.**
+
+Run the dump command from the in-game chat with enough bytes to capture the full struct. Start with 256 bytes; increase if the output is truncated:
+
+```
+;;dump in 55 256
 ```
 
-#### Asynchronous HTTP Requests
+This arms the latch for the next inbound packet with ID `0x55` (the `TRANSFER` packet in this example) and captures 256 bytes of its raw memory.
 
-Execute web requests in background worker threads without freezing the game render loop:
+**Step 3: Trigger the packet.**
+
+Perform the in-game action that causes the server to send this packet (accepting a server transfer prompt, entering a portal, etc.). The dumper fires once and writes the result to `butils_dumper.log`.
+
+**Step 4: Read the hex dump.**
+
+Open `butils_dumper.log`. You will see output like this:
+
+```
+[PacketDumper] === DUMP: INBOUND packet ID=0x55 | 256 bytes ===
+Offset   00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F   ASCII
+0x0000   00 00 00 00 00 00 00 00 02 00 00 00 01 00 00 00   ................
+0x0010   00 00 00 00 00 00 00 00 78 xx xx xx 00 00 00 00   ........x.......
+0x0020   0F 00 00 00 0F 00 00 00 73 65 72 76 65 72 2E 68   ........server.h
+0x0030   69 76 65 6D 63 2E 63 6F 6D 00 00 00 00 00 00 00   ivemk.com.......
+0x0040   xx xx xx xx 13 27 00 00 00 00 00 00 00 00 00 00   .....'.........
+```
+
+The heuristic detector highlights the `SafeString` header pattern at `+0x20` (size `0x0F` = 15, res `0x0F` = 15, SSO buffer starts at `+0x28` containing `server.hivemk.com`). The `uint16_t` at `+0x44` reads as `0x2713` = `10003` which looks like a port number.
+
+**Step 5: Map the fields.**
+
+Work through the dump systematically. The base `Packet` header occupies `+0x00` to `+0x2F`. Your packet fields start at `+0x30`:
+
+| Dump Offset | Raw Bytes | Interpretation |
+|---|---|---|
+| `+0x30` | `0F 00 00 00 0F 00 00 00 73 65 72 76 65 72...` | `SafeString` - hostname (`server.hivemk.com`) |
+| `+0x50` | `13 27 00 00` | `uint16_t` - port (`10003`) |
+
+**Step 6: Write the header.**
+
+Create `src/sdk/packets/TransferPacket.h` following the same pattern as existing packets. Add `static_assert` checks for every field offset you measured:
 
 ```cpp
-SDK::Http::getAsync("https://api.example.com/status", [](const SDK::HttpResponse& res)
+#pragma once
+#include "sdk/Packet.h"
+#include "sdk/SafeString.h"
+#include <cstdint>
+
+namespace SDK
 {
-    if (res.isSuccess())
+
+class TransferPacket : public Packet
+{
+public:
+    static constexpr PacketID ID = PacketID::TRANSFER;
+
+    SafeString address; // +0x30 (server hostname or IP)
+    uint16_t port;      // +0x50 (server port)
+
+    virtual ~TransferPacket() = default;
+
+    PacketID getID() const override
     {
-        SDK::Log::log("[HTTP] Received response: {}", res.body);
+        return PacketID::TRANSFER;
+    }
+};
+
+static_assert(offsetof(TransferPacket, address) == 0x30, "address offset mismatch");
+static_assert(offsetof(TransferPacket, port)    == 0x50, "port offset mismatch");
+
+} // namespace SDK
+```
+
+**Step 7: Verify with a listener.**
+
+Add a temporary listener in any module and log the parsed fields. If the values match what the server sent, the layout is correct:
+
+```cpp
+listen<SDK::TransferPacket>([](TypedPacketContext<SDK::TransferPacket>& ctx)
+{
+    if (ctx.isInbound() && ctx.packet)
+    {
+        SDK::Log::log("[Transfer] Server transferring to {}:{}", ctx.packet->address.str(), ctx.packet->port);
     }
 });
 ```
 
-#### Scheduled Task Execution
+If values look garbled, re-examine the dump at adjacent offsets or increase the dump size and repeat from Step 3.
 
-Run background work or schedule a function to run after a delay:
+[Back to Top](#quick-navigation)
+
+---
+
+<a id="sdkhttp" name="sdkhttp"></a>
+### HTTP Client (`SDK::Http`)
+
+Defined in `src/sdk/Http.h`. Performs synchronous HTTP and HTTPS requests using Windows WinINet with automatic fallback to `curl.exe` if WinINet fails or returns a non-success status.
 
 ```cpp
-SDK::Async::runDelayed(1000, []()
+#include "sdk/Http.h"
+```
+
+#### `SDK::Http::HttpResponse` Structure
+
+Every request function returns an `HttpResponse`:
+
+* `bool success`: True if the HTTP status code is in the 200-299 range.
+* `uint32_t statusCode`: The raw HTTP status code (200, 404, 500, etc.).
+* `std::string body`: The raw response body text.
+
+#### Request Functions
+
+1. `SDK::Http::HttpResponse SDK::Http::get(std::string_view url, uint32_t timeoutMs = 5000, const std::vector<std::string>& headers = {})`
+   Performs an HTTP GET request and returns the response.
+
+2. `SDK::Http::HttpResponse SDK::Http::post(std::string_view url, std::string_view body, std::string_view contentType = "application/x-www-form-urlencoded", uint32_t timeoutMs = 5000, const std::vector<std::string>& headers = {})`
+   Performs an HTTP POST request with the given body and content type.
+
+3. `SDK::Http::HttpResponse SDK::Http::postJson(std::string_view url, std::string_view jsonPayload, uint32_t timeoutMs = 5000, const std::vector<std::string>& headers = {})`
+   Shorthand for a POST request with `Content-Type: application/json`.
+
+4. `SDK::Http::HttpResponse SDK::Http::request(std::string_view method, std::string_view url, std::string_view body = "", std::string_view contentType = "", uint32_t timeoutMs = 5000, const std::vector<std::string>& headers = {})`
+   Base function for any arbitrary HTTP method.
+
+5. `SDK::Http::UrlComponents SDK::Http::parseUrl(std::string_view rawUrl)`
+   Parses a URL string into host, port, path, and SSL flag components.
+
+All HTTP calls are **synchronous**. Always wrap them inside `SDK::Async::run` (see below) to avoid blocking the game render thread.
+
+[Back to Top](#quick-navigation)
+
+---
+
+<a id="sdkasync" name="sdkasync"></a>
+### Async Worker Pool (`SDK::Async`)
+
+Defined in `src/sdk/Async.h`. Provides a C++20 `std::jthread`-backed worker pool to run arbitrary callables off the game render thread.
+
+```cpp
+#include "sdk/Async.h"
+```
+
+#### Functions
+
+1. `template<typename F, typename... Args> std::future<std::invoke_result_t<F, Args...>> SDK::Async::run(F&& f, Args&&... args)`
+   Submits a callable and its arguments to the background thread pool. Returns a `std::future` containing the eventual result.
+
+2. `void SDK::Async::init()`
+   Starts the worker threads (2 to 4 threads based on hardware concurrency). Called automatically on first use.
+
+3. `void SDK::Async::shutdown()`
+   Signals all worker threads to stop and waits for them to finish. Called during DLL ejection.
+
+#### Usage Examples
+
+Running an HTTP request off the render thread:
+
+```cpp
+SDK::Async::run([]()
 {
-    SDK::Chat::notify("One second has elapsed.");
+    SDK::Http::HttpResponse res = SDK::Http::get("https://api.example.com/status");
+    if (res.success)
+    {
+        SDK::Log::log("[MyModule] Response {}: {}", res.statusCode, res.body);
+    }
 });
+```
+
+Running a delayed notification using `std::this_thread::sleep_for`:
+
+```cpp
+SDK::Async::run([]()
+{
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    SDK::Chat::notify("Two seconds have passed.");
+});
+```
+
+Capturing a future result:
+
+```cpp
+std::future<int> fut = SDK::Async::run([](int a, int b) { return a + b; }, 10, 20);
+// fut.get() returns 30, but only block on it from another background thread
 ```
 
 [Back to Top](#quick-navigation)
 
 ---
 
-<a id="sdklog" name="sdklog"></a><a id="logging-sdklog" name="logging-sdklog"></a>
+<a id="sdklog" name="sdklog"></a>
 ### Logging (`SDK::Log`)
 
-Defined in `src/sdk/Logger.h`. Provides timestamped logging written directly to `butils.log`.
+Defined in `src/sdk/Logger.h`. Writes timestamped log entries simultaneously to `stdout`, `butils.log` on disk, and `OutputDebugStringA` for attached debuggers.
 
 ```cpp
 #include "sdk/Logger.h"
 ```
 
-#### Methods
+#### Functions
 
-* `SDK::Log::log("[ModuleName] Message here: {}", arg)`: Standard lifecycle and operational logging.
-* `SDK::Log::logDebug("[ModuleName] Verbose event: {}", arg)`: Diagnostic logging for high-frequency packet ticks.
+1. `template<typename... Args> void SDK::Log::log(std::format_string<Args...> fmt, Args&&... args)`
+   Standard operational logging. Use for lifecycle transitions, errors, and important state changes. Prefix each message with the module name in brackets.
+
+   ```cpp
+   SDK::Log::log("[MyModule] Enabled, greeting = {}", m_greeting);
+   ```
+
+2. `template<typename... Args> void SDK::Log::logDebug(std::format_string<Args...> fmt, Args&&... args)`
+   High-frequency diagnostic logging. Output is suppressed unless verbose mode is active. Use for per-packet or per-tick events.
+
+   ```cpp
+   SDK::Log::logDebug("[MyModule] Tick pos=({:.1f}, {:.1f})", x, y);
+   ```
+
+3. `void SDK::Log::setVerbose(bool enable)`
+   Enables or disables verbose mode globally.
+
+4. `bool SDK::Log::isVerbose()`
+   Returns true if verbose logging is currently enabled.
+
+5. `void SDK::Log::flush()`
+   Flushes `stdout` and the log file to disk. Do not call inside hot packet loops.
+
+6. `std::string SDK::Log::getLogDirectory()`
+   Returns the resolved writable log directory path (e.g. `C:\Users\User\AppData\Local\BedrockUtils\logs`).
 
 [Back to Top](#quick-navigation)
 
 ---
 
-<a id="sdksafestring-and-utilities" name="sdksafestring-and-utilities"></a><a id="safestring-and-utilities-sdksafestring" name="safestring-and-utilities-sdksafestring"></a>
-### SafeString and Utilities (`SDK::SafeString`)
+<a id="sdksafestring" name="sdksafestring"></a>
+### SafeString, PODVector, and Memory Helpers (`SDK::SafeString`)
 
-Defined in `src/sdk/SafeString.h`. Implements memory-safe string abstractions matching MSVC standard library binary layout.
+Defined in `src/sdk/SafeString.h`. Provides structs that precisely mirror MSVC's `std::string` and `std::vector` binary layout so that packet fields can be read and written without CRT heap mismatches.
 
 ```cpp
 #include "sdk/SafeString.h"
 ```
 
-#### Useful Helper Functions
+#### `SDK::SafeString`
 
-* `SDK::stripColorCodes(str)`: Removes Minecraft formatting codes (`§a`, `§l`, `§r`).
-* `SDK::cleanPlayerName(str)`: Strips colors, newlines, and bracketed guild/rank tags from nametags.
-* `SDK::uuidToString(uuidBytes)`: Converts a 16-byte buffer into a formatted UUID string (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
-* `SDK::toLower(str)`: Returns a lowercase copy of the string.
-* `SDK::toUpper(str)`: Returns an uppercase copy of the string.
-* `SDK::trim(str)`: Removes leading and trailing whitespace.
+Matches the 32-byte MSVC `std::string` layout. Strings up to 15 characters are stored in an inline SSO buffer. Longer strings use a heap pointer. All packet string fields use this type.
+
+* `std::string SafeString::str() const`: Returns a safe `std::string` copy of the content.
+* `std::string_view SafeString::view() const`: Returns a non-owning `std::string_view`.
+* `const char* SafeString::c_str() const`: Returns the null-terminated raw pointer.
+* `size_t SafeString::length() const`, `bool SafeString::empty() const`
+* `void SafeString::assign(std::string_view sv)`: Assigns new content, allocating heap memory with capacity aligned to `(size | 0x0F)` so Minecraft's internal `free()` can safely reclaim the buffer.
+
+#### `SDK::PODVector<T>`
+
+Matches the 24-byte MSVC `std::vector` layout (`_Myfirst`, `_Mylast`, `_Myend` pointers). Packet fields like `parameters` and `entries` use this type.
+
+* `size_t size() const`, `bool empty() const`
+* `const T& operator[](size_t idx) const`
+* `T* begin()`, `T* end()` - supports range-for loops.
+* `void push_back(const T& val)`
+
+#### Structured Exception (SEH) Safe Read Helpers
+
+For reading packet fields that may point into protected or page-guarded memory:
+
+* `bool SDK::safeReadString(const void* strAddr, std::string& out)`: SEH-guarded copy of a `SafeString` at a raw address.
+* `bool SDK::safeReadVectorString(const void* vecAddr, size_t index, std::string& out)`: SEH-guarded read of a `PODVector<SafeString>` element by index.
+
+#### String Utility Functions
+
+* `std::string SDK::stripColorCodes(std::string_view input)`: Removes `§` Minecraft color and formatting codes from any string.
+* `std::string SDK::cleanPlayerName(std::string_view input)`: Strips color codes, newlines, and common bracketed guild or rank tags.
+* `std::string SDK::uuidToString(const uint8_t uuid[16])`: Converts a 16-byte raw UUID array to the standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` string form.
+* `std::string_view SDK::trim(std::string_view sv)`: Trims leading and trailing ASCII whitespace.
+* `std::string SDK::toLower(std::string_view input)`: Returns a lowercase copy.
+* `std::string SDK::toUpper(std::string_view input)`: Returns an uppercase copy.
+
+[Back to Top](#quick-navigation)
+
+---
+
+<a id="sdkchatutils" name="sdkchatutils"></a>
+### Chat Parser (`SDK::ChatUtils`)
+
+Defined in `src/sdk/ChatUtils.h`. Extracts clean author names and message text from `TextPacket` across vanilla, Realms, and custom server chat formats.
+
+```cpp
+#include "sdk/ChatUtils.h"
+```
+
+#### `SDK::ParsedChat` Structure
+
+* `std::string author`: Clean player gamertag with color codes and rank tags stripped.
+* `std::string cleanMessage`: The message body with formatting removed.
+* `std::string rawMessage`: The original unmodified message string.
+
+#### Functions
+
+1. `SDK::ParsedChat SDK::ChatUtils::parse(const SDK::TextPacket* packet)`
+   Automatically detects the packet type (`TRANSLATION`, `CHAT`, `RAW`, `SYSTEM`) and extracts clean author and message content. Handles `<Author> Message`, `Author: Message`, `Author » Message`, and translation parameter formats.
+
+   ```cpp
+   listen<SDK::TextPacket>([](TypedPacketContext<SDK::TextPacket>& ctx)
+   {
+       if (ctx.isInbound() && ctx.packet)
+       {
+           SDK::ParsedChat parsed = SDK::ChatUtils::parse(ctx.packet);
+           SDK::Log::log("[Chat] {}: {}", parsed.author, parsed.cleanMessage);
+       }
+   });
+   ```
+
+2. `std::string SDK::ChatUtils::stripPrefixDelimiters(std::string_view text)`
+   Strips leading delimiter characters (`:`, `>`, `»`, `→`, `▶`, and similar UTF-8 arrows) from a string and trims whitespace.
+
+3. `bool SDK::ChatUtils::hasTranslatableText(std::string_view text)`
+   Returns true if the string contains ASCII letters or multi-byte UTF-8 characters (i.e. is non-empty and not purely punctuation or symbols).
+
+[Back to Top](#quick-navigation)
+
+---
+
+<a id="sdkjson" name="sdkjson"></a>
+### JSON Utilities (`SDK::Json`)
+
+Defined in `src/sdk/JsonUtils.h`. Lightweight embedded JSON utilities for parsing modal form payloads and constructing JSON strings without a full DOM library.
+
+```cpp
+#include "sdk/JsonUtils.h"
+```
+
+#### Functions
+
+1. `std::string SDK::Json::unescapeJsonString(std::string_view str)`
+   Decodes standard JSON escape sequences (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`, and `\uXXXX` Unicode points). The Minecraft section sign `\u00A7` is converted to `§`.
+
+2. `std::string SDK::Json::escapeJson(std::string_view str)`
+   Encodes a raw string into a valid JSON string value (escaping quotes, backslashes, and control characters).
+
+3. `std::string SDK::Json::extractJsonString(std::string_view json, std::string_view key)`
+   Extracts the value of a string field by key name without allocating a full JSON DOM. Useful for pulling specific fields from `ModalFormRequestPacket::formData`.
+
+4. `std::vector<std::string> SDK::Json::extractFormButtons(std::string_view json)`
+   Extracts all button label strings from a Bedrock `simple_form` or `form` JSON body.
+
+   ```cpp
+   listen<SDK::ModalFormRequestPacket>([](TypedPacketContext<SDK::ModalFormRequestPacket>& ctx)
+   {
+       if (ctx.isInbound() && ctx.packet)
+       {
+           std::string json = ctx.packet->formData.str();
+           std::string title = SDK::Json::extractJsonString(json, "title");
+           std::vector<std::string> buttons = SDK::Json::extractFormButtons(json);
+           SDK::Log::log("[Form] Title: {}, Buttons: {}", title, buttons.size());
+       }
+   });
+   ```
 
 [Back to Top](#quick-navigation)
 
@@ -685,55 +985,298 @@ Defined in `src/sdk/SafeString.h`. Implements memory-safe string abstractions ma
 
 All packet headers are located under `src/sdk/packets/`.
 
-<a id="textpacket-0x09" name="textpacket-0x09"></a><a id="textpacket" name="textpacket"></a>
+<a id="version-offset-notice" name="version-offset-notice"></a>
+
+> [!WARNING]
+> **Version Offset Notice**: All struct field offsets documented here were reverse engineered for **Minecraft Bedrock Edition (Windows x64), supported version 26.4x**. Mojang frequently shifts data structures across updates by adding fields, changing padding, or reordering members. When upgrading to a new Minecraft version, always verify offsets using the compile-time `static_assert` checks in each packet header and the in-game packet dumper (`;;dump`) before relying on any field.
+
+---
+
+<a id="base-packet-header" name="base-packet-header"></a>
+### Base Packet Header
+
+All packet types inherit from `SDK::Packet`. The first 0x30 bytes are shared by every packet:
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x00` | `vtable` | `void**` | Virtual method table pointer |
+| `+0x08` | `priority` | `int32_t` | Transmission priority (default 2) |
+| `+0x0C` | `reliability` | `int32_t` | Network reliability enum (default 1) |
+| `+0x10` | `subClientId` | `uint8_t` | Split-screen client index (default 0) |
+| `+0x11` | `isHandled` | `bool` | Processing completion flag |
+| `+0x20` | `handler` | `void***` | Engine dispatcher vtable pointer |
+| `+0x28` | `compressibility` | `int32_t` | Compression eligibility flag |
+
+Packet-specific fields begin at `+0x30`.
+
+---
+
+<a id="textpacket-0x09" name="textpacket-0x09"></a>
 ### TextPacket (`0x09`)
 
-Used for all player chat, broadcasts, whispers, and system notifications across both directions.
+Direction: Bidirectional. Carries all chat, broadcasts, whispers, and system notifications.
+
+Include: `sdk/packets/TextPacket.h`
 
 | Offset | Field | Type | Description |
 |---|---|---|---|
-| `+0x38` | `xuid` | `SafeString` | 16-digit Xbox User ID |
+| `+0x38` | `xuid` | `SafeString` | 16-digit Xbox User ID of sender |
 | `+0x58` | `platformChatId` | `SafeString` | Platform-specific chat identifier |
 | `+0x78` | `parameters` | `PODVector<SafeString>` | Translation parameter arguments |
-| `+0xA0` | `type` | `TextPacketType` | Packet type enum (`RAW=0`, `CHAT=1`, `SYSTEM=6`, etc.) |
-| `+0xA1` | `needsTranslation` | `bool` | Translation requirement flag |
+| `+0xA0` | `type` | `TextPacketType` | Packet type: `RAW=0`, `CHAT=1`, `TRANSLATION=2`, `SYSTEM=6` |
+| `+0xA1` | `needsTranslation` | `bool` | Whether client should translate the message |
 | `+0xA8` | `sourceName` | `SafeString` | Author gamertag |
 | `+0xC8` | `message` | `SafeString` | Primary message text payload |
-| `+0xE8` | `variantIndex` | `uint8_t` | Variant active tag (`0` = raw, `1` = chat, `2` = params) |
+| `+0xE8` | `variantIndex` | `uint8_t` | Active union variant: `0`=raw, `1`=chat, `2`=params |
 
-<a id="commandrequestpacket-0x4d" name="commandrequestpacket-0x4d"></a><a id="commandrequestpacket" name="commandrequestpacket"></a>
+The `getMessage()` helper resolves the correct field based on `variantIndex` and `type`. Prefer `SDK::ChatUtils::parse(packet)` for extracting clean author and message fields.
+
+---
+
+<a id="commandrequestpacket-0x4d" name="commandrequestpacket-0x4d"></a>
 ### CommandRequestPacket (`0x4D`)
 
-Outbound packet dispatched when running server commands.
+Direction: Outbound. Dispatched when the client executes a server command.
+
+Include: `sdk/packets/CommandRequestPacket.h`
 
 | Offset | Field | Type | Description |
 |---|---|---|---|
-| `+0x30` | `command` | `SafeString` | Command string including leading slash (`/help`) |
-| `+0x50` | `origin` | `CommandOriginData` | Command execution context |
-| `+0x68` | `origin.requestId`| `SafeString` | Internal tracking ID |
-| `+0x90` | `version` | `uint32_t` | Command protocol version (default 50) |
+| `+0x30` | `command` | `SafeString` | Command string with leading slash (e.g. `/help`) |
+| `+0x50` | `origin` | `CommandOriginData` | Command execution origin context |
+| `+0x68` | `origin.requestId` | `SafeString` | Internal request tracking UUID |
+| `+0x90` | `version` | `uint32_t` | Command protocol version (default `50`) |
 
-<a id="addplayerpacket-0x0c" name="addplayerpacket-0x0c"></a><a id="addplayerpacket" name="addplayerpacket"></a>
+---
+
+<a id="addplayerpacket-0x0c" name="addplayerpacket-0x0c"></a>
 ### AddPlayerPacket (`0x0C`)
 
-Inbound packet received when another player enters render distance.
+Direction: Inbound. Received when another player enters render distance in the 3D world.
+
+Include: `sdk/packets/AddPlayerPacket.h`
 
 | Offset | Field | Type | Description |
 |---|---|---|---|
-| `+0x38` | `uuid` | `SafeString` | Player UUID string |
-| `+0x58` | `username` | `SafeString` | Player username |
-| `+0x78` | `entityId` | `int64_t` | Unique entity identifier |
-| `+0x80` | `runtimeId` | `int64_t` | Runtime entity identifier |
-| `+0x98` | `pos` | `float[3]` | Spatial coordinates (X, Y, Z) |
+| `+0x30` | `uuid` | `uint8_t[16]` | Player 128-bit UUID (use `getUuidString()` helper) |
+| `+0x40` | `username` | `SafeString` | Raw username or nametag header |
+| `+0x60` | `runtimeEntityId` | `int64_t` | Runtime entity identifier |
+| `+0x68` | `platformChatId` | `SafeString` | Platform chat identifier |
+| `+0x88` | `pos` | `float[3]` | Spawn coordinates (X, Y, Z) |
+| `+0x94` | `motion` | `float[3]` | Initial velocity vector |
+| `+0xA0` | `rotation` | `float[3]` | Pitch, Yaw, HeadYaw |
+| `+0x118` | `entityData` | `SynchedActorData` | Synced actor metadata (name, scale, flags) |
+| `+0x1A0` | `deviceId` | `SafeString` | Hardware device identifier |
+| `+0x1C0` | `buildPlatform` | `BuildPlatform` | Client platform enum (8 = `WINDOWS_32`) |
 
-<a id="playerlistpacket-0x3f" name="playerlistpacket-0x3f"></a><a id="playerlistpacket" name="playerlistpacket"></a>
+The `BuildPlatform` enum values: `GOOGLE=1`, `IOS=2`, `OSX=3`, `AMAZON=4`, `UWP=7`, `WINDOWS_32=8`, `DEDICATED=9`, `SONY=11`, `NX=12`, `XBOX=13`, `LINUX=15`.
+
+The `getNametag()` helper reads the `NAME` entity data item. The `getUuidString()` helper formats the raw UUID bytes.
+
+---
+
+<a id="addactorpacket-0x0d" name="addactorpacket-0x0d"></a>
+### AddActorPacket (`0x0D`)
+
+Direction: Inbound. Received when a non-player entity (mob, projectile, vehicle) enters render distance.
+
+Include: `sdk/packets/AddActorPacket.h`
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x30` | `uniqueEntityId` | `int64_t` | Server-assigned unique entity ID |
+| `+0x38` | `runtimeEntityId` | `int64_t` | Runtime entity identifier |
+| `+0x40` | `identifier` | `SafeString` | Entity type string (e.g. `minecraft:zombie`) |
+| `+0x60` | `pos` | `float[3]` | Spawn coordinates (X, Y, Z) |
+| `+0x6C` | `motion` | `float[3]` | Initial velocity vector |
+| `+0x78` | `rotation` | `float[2]` | Pitch, Yaw |
+| `+0x80` | `headRotation` | `float` | Head yaw angle |
+| `+0x84` | `bodyRotation` | `float` | Body yaw angle |
+| `+0xA0` | `entityData` | `SynchedActorData` | Synchronized entity metadata |
+
+---
+
+<a id="removeactorpacket-0x0e" name="removeactorpacket-0x0e"></a>
+### RemoveActorPacket (`0x0E`)
+
+Direction: Inbound. Received when an entity leaves render distance or despawns.
+
+Include: `sdk/packets/RemoveActorPacket.h`
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x30` | `uniqueEntityId` | `int64_t` | Unique entity ID of the removed actor |
+
+---
+
+<a id="moveplayerpacket-0x13" name="moveplayerpacket-0x13"></a>
+### MovePlayerPacket (`0x13`)
+
+Direction: Bidirectional. Updates a player's position, rotation, and ground collision state.
+
+Include: `sdk/packets/MovePlayerPacket.h`
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x30` | `runtimeEntityId` | `int64_t` | Runtime entity identifier |
+| `+0x38` | `pos` | `float[3]` | Position coordinates (X, Y, Z) |
+| `+0x44` | `pitch` | `float` | Camera pitch angle |
+| `+0x48` | `yaw` | `float` | Body yaw angle |
+| `+0x4C` | `headYaw` | `float` | Head yaw angle |
+| `+0x50` | `mode` | `uint8_t` | Movement mode (0=Normal, 2=Teleport) |
+| `+0x51` | `onGround` | `bool` | Ground collision flag |
+| `+0x58` | `ridingRuntimeId` | `int64_t` | Mount entity runtime ID |
+| `+0x60` | `cause` | `int32_t` | Movement cause code |
+| `+0x68` | `tick` | `int64_t` | Server simulation tick |
+
+---
+
+<a id="moveactorabsolutepacket-0x12" name="moveactorabsolutepacket-0x12"></a>
+### MoveActorAbsolutePacket (`0x12`)
+
+Direction: Inbound. Sends absolute position for non-player entities.
+
+Include: `sdk/packets/MoveActorAbsolutePacket.h`
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x30` | `runtimeEntityId` | `int64_t` | Runtime entity identifier |
+| `+0x38` | `flags` | `uint8_t` | Teleport and orientation bitflags |
+| `+0x3C` | `pos` | `float[3]` | Absolute position (X, Y, Z) |
+| `+0x48` | `pitch` | `uint8_t` | Byte-quantized pitch angle |
+| `+0x49` | `yaw` | `uint8_t` | Byte-quantized yaw angle |
+| `+0x4A` | `headYaw` | `uint8_t` | Byte-quantized head yaw angle |
+
+---
+
+<a id="moveactordeltapacket-0x6f" name="moveactordeltapacket-0x6f"></a>
+### MoveActorDeltaPacket (`0x6F`)
+
+Direction: Inbound. High-frequency delta or absolute position update for moving entities.
+
+Include: `sdk/packets/MoveActorDeltaPacket.h`
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x30` | `runtimeEntityId` | `int64_t` | Runtime entity identifier |
+| `+0x38` | `flags` | `uint16_t` | Bitflags indicating which axes are present |
+| `+0x3C` | `pos` | `float[3]` | Delta or absolute position (X, Y, Z) |
+| `+0x48` | `pitch` | `uint8_t` | Quantized pitch angle |
+| `+0x49` | `yaw` | `uint8_t` | Quantized yaw angle |
+| `+0x4A` | `headYaw` | `uint8_t` | Quantized head yaw angle |
+
+---
+
+<a id="playerlistpacket-0x3f" name="playerlistpacket-0x3f"></a>
 ### PlayerListPacket (`0x3F`)
 
-Server roster update packet containing arrays of connected players.
+Direction: Inbound. Server roster update containing arrays of joining or leaving players.
+
+Include: `sdk/packets/PlayerListPacket.h`
 
 | Offset | Field | Type | Description |
 |---|---|---|---|
-| `+0x30` | `entries` | `PODVector<Entry>` | Array of connected player entries |
+| `+0x30` | `entries` | `PODVector<Entry>` | Array of player list entries |
+
+Each `PlayerListPacket::Entry` in the `entries` vector has the following layout:
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x00` | `action` | `uint8_t` | Action flag: `0` = ADD, `1` = REMOVE |
+| `+0x08` | `uuid` | `uint8_t[16]` | 128-bit player UUID (use `getUuidString()`) |
+| `+0x18` | `entityId` | `int64_t` | Server-assigned unique entity ID |
+| `+0x20` | `name` | `SafeString` | Player username |
+| `+0x40` | `xuid` | `SafeString` | 16-digit Xbox User ID |
+| `+0x60` | `platformOnlineId` | `SafeString` | Platform online gamertag |
+| `+0x80` | `buildPlatform` | `uint32_t` | Platform identifier (see `BuildPlatform` enum) |
+
+---
+
+<a id="modalformrequestpacket-0x64" name="modalformrequestpacket-0x64"></a>
+### ModalFormRequestPacket (`0x64`)
+
+Direction: Inbound. Sent by the server to display an interactive JSON form in the game UI.
+
+Include: `sdk/packets/ModalFormRequestPacket.h`
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x30` | `formId` | `uint32_t` | Server-assigned form tracking ID |
+| `+0x38` | `formData` | `SafeString` | Raw JSON form definition payload |
+
+Use `SDK::Json::extractJsonString(formData.str(), "title")` and `SDK::Json::extractFormButtons(formData.str())` to read form contents.
+
+---
+
+<a id="modalformresponsepacket-0x65" name="modalformresponsepacket-0x65"></a>
+### ModalFormResponsePacket (`0x65`)
+
+Direction: Outbound. Sent by the client when a player submits or closes a modal form.
+
+Include: `sdk/packets/ModalFormResponsePacket.h`
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x30` | `formId` | `uint32_t` | Target form identifier |
+| `+0x38` | `responseData` | `SafeString` | Selected button index or JSON response string |
+
+---
+
+<a id="availablecommandspacket-0x4c" name="availablecommandspacket-0x4c"></a>
+### AvailableCommandsPacket (`0x4C`)
+
+Direction: Inbound. Synchronizes the server's registered command definitions with the client parser.
+
+Include: `sdk/packets/AvailableCommandsPacket.h`
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x30` | `enumValues` | `PODVector<SafeString>` | Enum value strings for command arguments |
+| `+0x48` | `postFixes` | `PODVector<SafeString>` | Postfix strings for command completions |
+| `+0xA8` | `commands` | `PODVector<CommandData>` | Registered server command definitions |
+
+Each `CommandData` entry exposes `getName()` and `getDescription()` helpers, along with `flags` and `permission` bytes.
+
+The `hasCommand(std::string_view name)` method on the packet checks if a specific command exists in the list.
+
+---
+
+<a id="changedimensionpacket-0x3d" name="changedimensionpacket-0x3d"></a>
+### ChangeDimensionPacket (`0x3D`)
+
+Direction: Inbound. Sent when the player transitions between dimensions.
+
+Include: `sdk/packets/ChangeDimensionPacket.h`
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x30` | `dimension` | `int32_t` | Target dimension: `0`=Overworld, `1`=Nether, `2`=The End |
+| `+0x34` | `pos` | `float[3]` | Target spawn coordinates (X, Y, Z) |
+| `+0x40` | `respawn` | `bool` | Respawn state flag |
+
+---
+
+<a id="playstatuspacket-0x02" name="playstatuspacket-0x02"></a>
+### PlayStatusPacket (`0x02`)
+
+Direction: Inbound. Sent during the connection handshake and world spawning sequence.
+
+Include: `sdk/packets/PlayStatusPacket.h`
+
+| Offset | Field | Type | Description |
+|---|---|---|---|
+| `+0x30` | `status` | `PlayStatusType` | Status code (see enum below) |
+
+The `PlayStatusType` enum:
+
+| Value | Name | Meaning |
+|---|---|---|
+| `0` | `LOGIN_SUCCESS` | Login accepted, world loading starts |
+| `1` | `LOGIN_FAILED_CLIENT_OLD` | Client version too old |
+| `2` | `LOGIN_FAILED_SERVER_OLD` | Server version too old |
+| `3` | `PLAYER_SPAWN` | Player is fully spawned and ready |
+| `4` | `LOGIN_FAILED_INVALID_TENANT` | Invalid tenant (education mismatch) |
+| `7` | `FAILED_SERVER_FULL_SUB_CLIENT` | Server is full |
 
 [Back to Top](#quick-navigation)
 
