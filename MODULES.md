@@ -67,7 +67,7 @@ void MyFeature::onUnload()
 | Hook | When it fires |
 |---|---|
 | `onLoad()` | Once when the module is first registered at startup. Register listeners and commands here. |
-| `onEnable()` | Every time the module is toggled on. Not called at startup if the module starts enabled — `onLoad` handles that. |
+| `onEnable()` | Every time the module is enabled (including at startup if enabled by default). |
 | `onDisable()` | Every time the module is toggled off. |
 | `onUnload()` | Once on DLL eject. All listeners and commands are auto-cleaned after this. |
 | `onTick()` | Called on every game tick, only while the module is enabled. |
@@ -293,7 +293,18 @@ void ChatLogger::onLoad()
     });
 }
 
-void ChatLogger::onEnable()  { SDK::Log::log("[ChatLogger] Enabled");  }
-void ChatLogger::onDisable() { SDK::Log::log("[ChatLogger] Disabled"); }
-void ChatLogger::onUnload()  { SDK::Log::log("[ChatLogger] Unloaded"); }
+void ChatLogger::onEnable()
+{
+    SDK::Log::log("[ChatLogger] Enabled");
+}
+
+void ChatLogger::onDisable()
+{
+    SDK::Log::log("[ChatLogger] Disabled");
+}
+
+void ChatLogger::onUnload()
+{
+    SDK::Log::log("[ChatLogger] Unloaded");
+}
 ```

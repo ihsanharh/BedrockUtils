@@ -12,10 +12,10 @@ using CreateFn = std::shared_ptr<Packet>(__fastcall*)(int32_t);
 
 std::shared_ptr<Packet> createPacket(PacketID id)
 {
-    CreateFn fn = reinterpret_cast<CreateFn>(Addresses::createPacket);
+    CreateFn fn = reinterpret_cast<CreateFn>(Addresses::g_createPacket);
     if (!fn)
     {
-        SDK::Log::log("[Factory] createPacket: Addresses::createPacket is 0!");
+        SDK::Log::log("[Factory] createPacket: Addresses::g_createPacket is 0!");
         return nullptr;
     }
 

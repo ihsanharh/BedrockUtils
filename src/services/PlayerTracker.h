@@ -74,10 +74,17 @@ struct TrackedPlayer
         onGround = pOnGround;
     }
 
-    const std::string& getNametag() const { return !nametag.empty() ? nametag : name; }
-    bool isSpawnedInWorld() const { return isSpawned && runtimeEntityId != 0; }
+    [[nodiscard]] const std::string& getNametag() const noexcept
+    {
+        return !nametag.empty() ? nametag : name;
+    }
 
-    float distanceTo(float x, float y, float z) const
+    [[nodiscard]] bool isSpawnedInWorld() const noexcept
+    {
+        return isSpawned && runtimeEntityId != 0;
+    }
+
+    [[nodiscard]] float distanceTo(float x, float y, float z) const noexcept
     {
         float dx = pos[0] - x;
         float dy = pos[1] - y;
@@ -85,11 +92,19 @@ struct TrackedPlayer
         return std::sqrt(dx * dx + dy * dy + dz * dz);
     }
 
-    float distanceTo(const float p[3]) const { return p ? distanceTo(p[0], p[1], p[2]) : 0.0f; }
-    float distanceTo(const TrackedPlayer& other) const { return distanceTo(other.pos[0], other.pos[1], other.pos[2]); }
-    float distanceToLocalPlayer() const;
+    [[nodiscard]] float distanceTo(const float p[3]) const noexcept
+    {
+        return p ? distanceTo(p[0], p[1], p[2]) : 0.0f;
+    }
 
-    std::string getPlatformName() const;
+    [[nodiscard]] float distanceTo(const TrackedPlayer& other) const noexcept
+    {
+        return distanceTo(other.pos[0], other.pos[1], other.pos[2]);
+    }
+
+    [[nodiscard]] float distanceToLocalPlayer() const;
+
+    [[nodiscard]] std::string getPlatformName() const;
 };
 
 class PlayerTracker
@@ -110,10 +125,25 @@ public:
     void clearWorldActors();
 
     // Configuration
-    void setAutoClearOnDimensionChange(bool enable) { m_autoClearOnDimension = enable; }
-    bool shouldAutoClearOnDimensionChange() const { return m_autoClearOnDimension; }
-    void setTrackMovement(bool enable) { m_trackMovement.store(enable, std::memory_order_relaxed); }
-    bool isTrackingMovement() const { return m_trackMovement.load(std::memory_order_relaxed); }
+    void setAutoClearOnDimensionChange(bool enable) noexcept
+    {
+        m_autoClearOnDimension = enable;
+    }
+
+    [[nodiscard]] bool shouldAutoClearOnDimensionChange() const noexcept
+    {
+        return m_autoClearOnDimension;
+    }
+
+    void setTrackMovement(bool enable) noexcept
+    {
+        m_trackMovement.store(enable, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] bool isTrackingMovement() const noexcept
+    {
+        return m_trackMovement.load(std::memory_order_relaxed);
+    }
 
     // Roster / PlayerList mutation
     void addPlayer(const std::string& uuid, const std::string& playerName, int64_t entityId);

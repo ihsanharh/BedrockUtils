@@ -3,6 +3,7 @@
 #include "Addresses.h"
 #include "SafeString.h"
 #include "intercept/PacketInterceptor.h"
+#include <mutex>
 #include <windows.h>
 
 namespace SDK
@@ -12,12 +13,12 @@ Platform_GameCore* Platform_GameCore::get()
 {
     __try
     {
-        if (!Addresses::platformGameCore)
+        if (!Addresses::g_platformGameCore)
         {
             return nullptr;
         }
 
-        void* winMain = *reinterpret_cast<void**>(Addresses::platformGameCore);
+        void* winMain = *reinterpret_cast<void**>(Addresses::g_platformGameCore);
         if (!winMain)
         {
             return nullptr;
@@ -146,6 +147,19 @@ PacketSender* ClientInstance::packetSender()
     return nullptr;
 }
 
+MinecraftGame* ClientInstance::getMinecraftGame()
+{
+    __try
+    {
+        MinecraftGame* mg = *reinterpret_cast<MinecraftGame* const*>(reinterpret_cast<uintptr_t>(this) + 0x1A0);
+        return mg;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
+}
+
 PacketSender* LocalPlayer::packetSender() const
 {
     __try
@@ -174,6 +188,42 @@ float* LocalPlayer::getPos() const
     {
         return nullptr;
     }
+}
+
+std::string LocalPlayer::getName() const
+{
+    __try
+    {
+        std::string name;
+        if (safeReadString(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(this) + 0xBC0), name))
+        {
+            return name;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return "";
+}
+
+std::string LocalPlayer::getXuid() const
+{
+    __try
+    {
+        ClientInstance* ci = ClientInstance::get();
+        if (ci)
+        {
+            MinecraftGame* mg = ci->getMinecraftGame();
+            if (mg)
+            {
+                std::string xuid;
+                if (safeReadString(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mg) + 0x250), xuid))
+                {
+                    return xuid;
+                }
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return "";
 }
 
 static bool readEngineConnectionInfo(ServerConnectionDetails& out)
@@ -311,6 +361,55 @@ bool isServer(std::string_view pattern)
         return false;
     }
     return connection().matches(pattern);
+}
+
+static std::string s_cachedPlayerName;
+static std::string s_cachedPlayerXuid;
+static std::mutex  s_credMutex;
+
+void setCachedCredentials(std::string_view name, std::string_view xuid)
+{
+    std::lock_guard<std::mutex> lk(s_credMutex);
+    if (!name.empty())
+    {
+        s_cachedPlayerName = std::string(name);
+    }
+    if (!xuid.empty())
+    {
+        s_cachedPlayerXuid = std::string(xuid);
+    }
+}
+
+std::string getLocalPlayerName()
+{
+    LocalPlayer* lp = player();
+    if (lp)
+    {
+        std::string name = lp->getName();
+        if (!name.empty())
+        {
+            return name;
+        }
+    }
+
+    std::lock_guard<std::mutex> lk(s_credMutex);
+    return s_cachedPlayerName;
+}
+
+std::string getLocalPlayerXuid()
+{
+    LocalPlayer* lp = player();
+    if (lp)
+    {
+        std::string xuid = lp->getXuid();
+        if (!xuid.empty())
+        {
+            return xuid;
+        }
+    }
+
+    std::lock_guard<std::mutex> lk(s_credMutex);
+    return s_cachedPlayerXuid;
 }
 
 } // namespace Game

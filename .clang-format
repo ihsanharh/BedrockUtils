@@ -2,9 +2,13 @@ Language: Cpp
 BasedOnStyle: LLVM
 IndentWidth: 4
 BreakBeforeBraces: Allman
-AllowShortFunctionsOnASingleLine: Inline
+AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: false
 AllowShortLoopsOnASingleLine: false
 AccessModifierOffset: -4
 PointerAlignment: Left
 SpaceAfterTemplateKeyword: false
+BreakTemplateDeclarations: Yes
+AllowShortBlocksOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Empty
+ColumnLimit: 120

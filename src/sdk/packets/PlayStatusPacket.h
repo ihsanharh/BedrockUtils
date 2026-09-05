@@ -24,12 +24,15 @@ class PlayStatusPacket : public Packet
 public:
     static constexpr PacketID ID = PacketID::PLAY_STATUS;
 
-    PlayStatusType status;       // +0x30
-    uint8_t unmapped[128];       // +0x34
+    PlayStatusType status; // +0x30
+    uint8_t unmapped[128]; // +0x34
 
     virtual ~PlayStatusPacket() = default;
 
-    PacketID getID() const override { return PacketID::PLAY_STATUS; }
+    PacketID getID() const override
+    {
+        return PacketID::PLAY_STATUS;
+    }
 };
 
 static_assert(offsetof(PlayStatusPacket, status) == 0x30, "status offset mismatch");

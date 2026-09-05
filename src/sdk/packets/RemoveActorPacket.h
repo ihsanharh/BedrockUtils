@@ -14,7 +14,10 @@ public:
 
     virtual ~RemoveActorPacket() = default;
 
-    PacketID getID() const override { return PacketID::REMOVE_ACTOR; }
+    PacketID getID() const override
+    {
+        return PacketID::REMOVE_ACTOR;
+    }
 };
 
 static_assert(offsetof(RemoveActorPacket, uniqueEntityId) == 0x30, "uniqueEntityId offset mismatch");

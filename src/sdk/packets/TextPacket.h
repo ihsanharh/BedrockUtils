@@ -39,7 +39,8 @@ public:
     uint8_t                pad2[6];          // +0xA2
     SafeString             sourceName;       // +0xA8
     SafeString             message;          // +0xC8
-    uint8_t                unmapped[128];    // +0xE8
+    uint8_t                variantIndex = 0; // +0xE8 (0=monostate/raw, 1=chat message, 2=params)
+    uint8_t                unmapped[127];    // +0xE9
 
     // Resolves text content with fallbacks (message -> sourceName -> parameters[0])
     std::string getMessage() const
@@ -82,5 +83,6 @@ static_assert(offsetof(TextPacket, type)             == 0xA0, "type offset misma
 static_assert(offsetof(TextPacket, needsTranslation) == 0xA1, "needsTranslation offset mismatch");
 static_assert(offsetof(TextPacket, sourceName)       == 0xA8, "sourceName offset mismatch");
 static_assert(offsetof(TextPacket, message)          == 0xC8, "message offset mismatch");
+static_assert(offsetof(TextPacket, variantIndex)     == 0xE8, "variantIndex offset mismatch");
 
 } // namespace SDK

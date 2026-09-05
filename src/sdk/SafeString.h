@@ -19,13 +19,20 @@ struct PODVector
     T* _Mylast  = nullptr;
     T* _Myend   = nullptr;
 
-    size_t size() const
+    [[nodiscard]] size_t size() const noexcept
     {
         return (_Myfirst && _Mylast && _Mylast >= _Myfirst) ? static_cast<size_t>(_Mylast - _Myfirst) : 0;
     }
 
-    bool empty() const { return size() == 0; }
-    void clear() { _Myfirst = _Mylast = _Myend = nullptr; }
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return size() == 0;
+    }
+
+    void clear() noexcept
+    {
+        _Myfirst = _Mylast = _Myend = nullptr;
+    }
 
     void push_back(const T& val)
     {
@@ -38,6 +45,7 @@ struct PODVector
             if (_Myfirst && curSize > 0)
             {
                 std::memcpy(newBuf, _Myfirst, curSize * sizeof(T));
+                ::operator delete(_Myfirst);
             }
             _Myfirst = newBuf;
             _Mylast = newBuf + curSize;
@@ -47,16 +55,45 @@ struct PODVector
         ++_Mylast;
     }
 
-    const T* data() const { return _Myfirst; }
-    T* data() { return _Myfirst; }
+    [[nodiscard]] const T* data() const noexcept
+    {
+        return _Myfirst;
+    }
 
-    const T& operator[](size_t idx) const { return _Myfirst[idx]; }
-    T& operator[](size_t idx) { return _Myfirst[idx]; }
+    [[nodiscard]] T* data() noexcept
+    {
+        return _Myfirst;
+    }
 
-    const T* begin() const { return _Myfirst; }
-    const T* end() const { return _Mylast; }
-    T* begin() { return _Myfirst; }
-    T* end() { return _Mylast; }
+    [[nodiscard]] const T& operator[](size_t idx) const noexcept
+    {
+        return _Myfirst[idx];
+    }
+
+    [[nodiscard]] T& operator[](size_t idx) noexcept
+    {
+        return _Myfirst[idx];
+    }
+
+    [[nodiscard]] const T* begin() const noexcept
+    {
+        return _Myfirst;
+    }
+
+    [[nodiscard]] const T* end() const noexcept
+    {
+        return _Mylast;
+    }
+
+    [[nodiscard]] T* begin() noexcept
+    {
+        return _Myfirst;
+    }
+
+    [[nodiscard]] T* end() noexcept
+    {
+        return _Mylast;
+    }
 };
 static_assert(sizeof(PODVector<void*>) == 24, "PODVector size mismatch with MSVC std::vector");
 
@@ -209,17 +246,50 @@ struct SafeString
     std::string str() const;
     std::string_view view() const;
 
-    operator std::string() const { return str(); }
-    operator std::string_view() const { return view(); }
+    operator std::string() const
+    {
+        return str();
+    }
 
-    bool empty() const { return view().empty(); }
-    size_t length() const { return view().size(); }
-    const char* c_str() const { return view().data(); }
+    operator std::string_view() const noexcept
+    {
+        return view();
+    }
 
-    bool operator==(std::string_view other) const { return view() == other; }
-    bool operator==(const SafeString& other) const { return view() == other.view(); }
-    bool operator==(const std::string& other) const { return view() == other; }
-    bool operator==(const char* other) const { return other ? view() == other : empty(); }
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return view().empty();
+    }
+
+    [[nodiscard]] size_t length() const noexcept
+    {
+        return view().size();
+    }
+
+    [[nodiscard]] const char* c_str() const noexcept
+    {
+        return view().data();
+    }
+
+    [[nodiscard]] bool operator==(std::string_view other) const noexcept
+    {
+        return view() == other;
+    }
+
+    [[nodiscard]] bool operator==(const SafeString& other) const noexcept
+    {
+        return view() == other.view();
+    }
+
+    [[nodiscard]] bool operator==(const std::string& other) const noexcept
+    {
+        return view() == other;
+    }
+
+    [[nodiscard]] bool operator==(const char* other) const noexcept
+    {
+        return other ? view() == other : empty();
+    }
 
     friend std::ostream& operator<<(std::ostream& os, const SafeString& s);
 };

@@ -21,7 +21,9 @@ struct StateVectorComponent
 struct LocalPlayer
 {
     PacketSender* packetSender() const; // +0x7F8
-    float* getPos() const;
+    float* getPos() const;              // StateVector at +0x218
+    std::string getName() const;        // playerName at +0xBC0
+    std::string getXuid() const;        // xuid via MinecraftGame (+0x250)
 };
 
 class ClientInstance;
@@ -42,8 +44,9 @@ public:
 class ClientInstance
 {
 public:
-    LocalPlayer* getLocalPlayer(); // vtable[0x1F]
-    PacketSender* packetSender();  // +0x1C8
+    LocalPlayer* getLocalPlayer();      // vtable[0x1F]
+    PacketSender* packetSender();       // +0x1C8
+    MinecraftGame* getMinecraftGame();  // +0x1A0
     static ClientInstance* get();
 };
 
@@ -91,6 +94,11 @@ namespace Game
     // Universal server detection helpers for modules
     bool isConnected();
     bool isServer(std::string_view pattern);
+
+    // Player identity helpers
+    void setCachedCredentials(std::string_view name, std::string_view xuid);
+    std::string getLocalPlayerName();
+    std::string getLocalPlayerXuid();
 }
 
 } // namespace SDK

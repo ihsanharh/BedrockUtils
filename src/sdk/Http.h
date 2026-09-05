@@ -212,7 +212,7 @@ inline HttpResponse execCurl(
     return response;
 }
 
-inline std::atomic<bool> s_preferCurl{false};
+inline std::atomic<bool> g_preferCurl{false};
 
 inline HttpResponse request(
     std::string_view method,
@@ -223,7 +223,7 @@ inline HttpResponse request(
     const std::vector<std::string>& headers = {}
 )
 {
-    if (s_preferCurl.load(std::memory_order_relaxed))
+    if (g_preferCurl.load(std::memory_order_relaxed))
     {
         HttpResponse curlRes = execCurl(method, url, body, contentType, (timeoutMs + 999) / 1000, headers);
         if (curlRes.success || !curlRes.body.empty())
@@ -376,7 +376,7 @@ inline HttpResponse request(
         HttpResponse curlRes = execCurl(method, url, body, contentType, (timeoutMs + 999) / 1000, headers);
         if (curlRes.success || !curlRes.body.empty())
         {
-            s_preferCurl.store(true, std::memory_order_relaxed);
+            g_preferCurl.store(true, std::memory_order_relaxed);
             return curlRes;
         }
     }

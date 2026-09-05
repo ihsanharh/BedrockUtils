@@ -9,6 +9,12 @@
 #include "sdk/packets/AddPlayerPacket.h"
 #include <MinHook.h>
 #include <deque>
+#include <mutex>
+#include <vector>
+
+static std::vector<std::shared_ptr<SDK::Packet>> s_startupPackets;
+static std::deque<std::shared_ptr<SDK::Packet>>  s_heldInbound;
+static std::mutex                                s_heldMutex;
 
 // Helper to get packet name from ID
 static const char* getPacketName(SDK::PacketID id)
@@ -401,7 +407,6 @@ bool PacketInterceptor::install()
 
     std::unique_lock<std::shared_mutex> lk(m_inboundMutex);
 
-    static std::vector<std::shared_ptr<SDK::Packet>> s_startupPackets;
     s_startupPackets.clear();
     s_startupPackets.reserve(kScanPackets);
 
@@ -549,6 +554,16 @@ void PacketInterceptor::uninstall()
 
     m_lastNetId.store(nullptr, std::memory_order_relaxed);
     m_lastCb.store(nullptr, std::memory_order_relaxed);
+    m_clientCb.store(nullptr, std::memory_order_relaxed);
+    m_clientVtable.store(nullptr, std::memory_order_relaxed);
+    m_outboundHooked = false;
+    s_origSendToServer = nullptr;
+
+    {
+        std::lock_guard<std::mutex> lk(s_heldMutex);
+        s_heldInbound.clear();
+    }
+    s_startupPackets.clear();
 
     {
         std::unique_lock<std::shared_mutex> lk(m_inboundMutex);
@@ -662,8 +677,6 @@ void PacketInterceptor::dispatchInboundDirect(std::shared_ptr<SDK::Packet> pkt, 
         }
 
         // Keep packet alive in a ring buffer so Minecraft's UI tasks don't experience a use-after-free
-        static std::deque<std::shared_ptr<SDK::Packet>> s_heldInbound;
-        static std::mutex s_heldMutex;
         {
             std::lock_guard<std::mutex> lk(s_heldMutex);
             s_heldInbound.push_back(pkt);

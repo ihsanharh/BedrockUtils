@@ -9,7 +9,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace SDK
@@ -17,7 +16,6 @@ namespace SDK
 
 class TextPacket;
 class ModalFormRequestPacket;
-class AvailableCommandsPacket;
 
 enum class CommandResponseType
 {
@@ -41,9 +39,20 @@ struct CommandResult
     std::optional<FormResponse> form;
     bool isSuccess = true;
 
-    bool isForm() const { return type == CommandResponseType::Form; }
-    bool isText() const { return type == CommandResponseType::Text; }
-    bool isTimeout() const { return type == CommandResponseType::Timeout; }
+    [[nodiscard]] bool isForm() const noexcept
+    {
+        return type == CommandResponseType::Form;
+    }
+
+    [[nodiscard]] bool isText() const noexcept
+    {
+        return type == CommandResponseType::Text;
+    }
+
+    [[nodiscard]] bool isTimeout() const noexcept
+    {
+        return type == CommandResponseType::Timeout;
+    }
 
     std::string text(std::string_view delim = "\n") const
     {
@@ -73,20 +82,11 @@ enum class RequestLifecycle
     Squelching // Completed/fired callback, but continuing to drop trailing/late packets within squelchMs
 };
 
-struct AvailableCommandInfo
-{
-    std::string name;
-    std::string description;
-    uint8_t flags = 0;
-    uint8_t permission = 0;
-};
-
 struct CommandRequest
 {
     std::string command;
     ExpectedResponseType expectedType = ExpectedResponseType::Any;
     bool silent = true;                         // hide from chat / ui
-    bool waitForAvailable = true;               // wait for AvailableCommandsPacket before dispatching if not yet received
     uint32_t timeoutMs = 3000;
     uint32_t batchDebounceMs = 200;             // wait time after last line to seal multiline text
     uint32_t squelchMs = 400;                   // swallow late/trailing packet after completion
@@ -113,14 +113,15 @@ public:
     void reset();
     void shutdown();
 
-    // Available commands query API
-    bool hasAvailableCommands() const;
-    bool isCommandAvailable(std::string_view command) const;
-    std::vector<AvailableCommandInfo> getAvailableCommands() const;
-    std::optional<AvailableCommandInfo> getCommandInfo(std::string_view command) const;
+    void setCooldownMs(uint32_t ms) noexcept
+    {
+        m_minCommandCooldownMs = ms;
+    }
 
-    void setCooldownMs(uint32_t ms) { m_minCommandCooldownMs = ms; }
-    uint32_t getCooldownMs() const { return m_minCommandCooldownMs; }
+    [[nodiscard]] uint32_t getCooldownMs() const noexcept
+    {
+        return m_minCommandCooldownMs;
+    }
 
 private:
     CommandManager() = default;
@@ -144,15 +145,11 @@ private:
     std::chrono::steady_clock::time_point m_lastDispatchTime{};
     uint32_t m_minCommandCooldownMs = 3000; // 3s cooldown between commands as requested
 
-    std::unordered_map<std::string, AvailableCommandInfo> m_availableCommands;
-    std::unordered_set<std::string> m_knownAliases;
-    bool m_hasAvailableCommands = false;
     bool m_initialized = false;
 
     bool dispatchInternal(CommandRequest& req);
     void handleInboundText(TypedPacketContext<TextPacket>& ctx);
     void handleInboundForm(TypedPacketContext<ModalFormRequestPacket>& ctx);
-    void handleInboundAvailableCommands(TypedPacketContext<AvailableCommandsPacket>& ctx);
     void handleInboundCommandOutput(PacketContext& ctx);
 };
 

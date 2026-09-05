@@ -32,21 +32,35 @@ enum class PacketID : uint8_t
 class Packet
 {
 public:
-    int32_t priority = 2;       // +0x08
-    int32_t reliability = 1;    // +0x0C
-    uint8_t subClientId = 0;    // +0x10
-    bool isHandled = false;     // +0x11
-    void *unknown = nullptr;    // +0x18
-    void ***handler = nullptr;  // +0x20 points to dispatcher vtable (slot 1 is handle)
-    int32_t compressibility = 0;// +0x28
+    int32_t priority = 2;        // +0x08
+    int32_t reliability = 1;     // +0x0C
+    uint8_t subClientId = 0;     // +0x10
+    bool isHandled = false;      // +0x11
+    void* unknown = nullptr;     // +0x18
+    void*** handler = nullptr;   // +0x20 points to dispatcher vtable (slot 1 is handle)
+    int32_t compressibility = 0; // +0x28
 
     virtual ~Packet() = default;
-    virtual PacketID getID() const { return PacketID::NONE; }
-    virtual std::string getName() const { return "Packet"; }
-    virtual void write(void *) {}
-    virtual void readExtended(void *) {}
-    virtual bool allowBatch() { return false; }
-    virtual void _read(void *) {}
+
+    [[nodiscard]] virtual PacketID getID() const
+    {
+        return PacketID::NONE;
+    }
+
+    [[nodiscard]] virtual std::string getName() const
+    {
+        return "Packet";
+    }
+
+    virtual void write(void*) {}
+    virtual void readExtended(void*) {}
+
+    [[nodiscard]] virtual bool allowBatch()
+    {
+        return false;
+    }
+
+    virtual void _read(void*) {}
 };
 
 } // namespace SDK

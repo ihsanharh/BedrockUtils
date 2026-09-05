@@ -5,6 +5,7 @@
 #include "sdk/SafeString.h"
 #include "sdk/packets/TextPacket.h"
 #include "sdk/Chat.h"
+#include "sdk/Game.h"
 #include "sdk/Logger.h"
 #include <algorithm>
 #include <format>
@@ -99,6 +100,10 @@ std::vector<RegisteredCommand> CommandDispatcher::getCommands() const
     {
         list.push_back(kv.second);
     }
+    std::sort(list.begin(), list.end(), [](const RegisteredCommand& a, const RegisteredCommand& b)
+    {
+        return a.name < b.name;
+    });
     return list;
 }
 
@@ -204,6 +209,11 @@ void CommandDispatcher::handleOutboundChat(TypedPacketContext<SDK::TextPacket>& 
     if (!ctx.packet)
     {
         return;
+    }
+
+    if (!ctx.packet->sourceName.empty())
+    {
+        SDK::Game::setCachedCredentials(ctx.packet->sourceName.view(), ctx.packet->xuid.view());
     }
 
     std::vector<std::string> allTexts;

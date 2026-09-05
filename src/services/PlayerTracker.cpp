@@ -133,34 +133,43 @@ void PlayerTracker::addPlayer(const std::string& uuid, const std::string& player
 
 void PlayerTracker::addPlayer(const std::string& uuid, const std::string& playerName, int64_t entityId, int64_t runtimeId, const float pos[3])
 {
-    std::lock_guard<std::recursive_mutex> lk(m_mutex);
+    std::shared_ptr<TrackedPlayer> player;
+    std::vector<PlayerCallback> joinCbs;
     bool isNew = false;
-    std::shared_ptr<TrackedPlayer> player = getOrCreatePlayerLocked(uuid, isNew);
+    {
+        std::lock_guard<std::recursive_mutex> lk(m_mutex);
+        player = getOrCreatePlayerLocked(uuid, isNew);
 
-    if (!playerName.empty())
-    {
-        player->name = playerName;
-    }
-    if (entityId != 0)
-    {
-        player->uniqueEntityId = entityId;
-    }
-    if (runtimeId != 0)
-    {
-        player->runtimeEntityId = runtimeId;
-        player->isSpawned = true;
-    }
-    if (pos)
-    {
-        player->updatePosition(pos);
+        if (!playerName.empty())
+        {
+            player->name = playerName;
+        }
+        if (entityId != 0)
+        {
+            player->uniqueEntityId = entityId;
+        }
+        if (runtimeId != 0)
+        {
+            player->runtimeEntityId = runtimeId;
+            player->isSpawned = true;
+        }
+        if (pos)
+        {
+            player->updatePosition(pos);
+        }
+
+        player->lastSeen = std::chrono::steady_clock::now();
+        bindPlayerIndices(player);
+
+        if (isNew)
+        {
+            joinCbs = m_joinCallbacks;
+        }
     }
 
-    player->lastSeen = std::chrono::steady_clock::now();
-    bindPlayerIndices(player);
-
-    if (isNew)
+    if (isNew && player)
     {
-        for (const PlayerCallback& cb : m_joinCallbacks)
+        for (const PlayerCallback& cb : joinCbs)
         {
             if (cb)
             {
@@ -172,48 +181,56 @@ void PlayerTracker::addPlayer(const std::string& uuid, const std::string& player
 
 void PlayerTracker::updatePlayerPosition(int64_t runtimeId, const float pos[3])
 {
-    std::lock_guard<std::recursive_mutex> lk(m_mutex);
-    std::unordered_map<int64_t, std::shared_ptr<TrackedPlayer>>::const_iterator it = m_runtimeIdToPlayer.find(runtimeId);
-    if (it == m_runtimeIdToPlayer.end() || !it->second)
+    std::shared_ptr<TrackedPlayer> player;
+    std::vector<PlayerCallback> moveCbs;
     {
-        return;
+        std::lock_guard<std::recursive_mutex> lk(m_mutex);
+        std::unordered_map<int64_t, std::shared_ptr<TrackedPlayer>>::const_iterator it = m_runtimeIdToPlayer.find(runtimeId);
+        if (it == m_runtimeIdToPlayer.end() || !it->second)
+        {
+            return;
+        }
+
+        it->second->updatePosition(pos);
+        player = it->second;
+        moveCbs = m_moveCallbacks;
     }
 
-    it->second->updatePosition(pos);
-    if (!m_moveCallbacks.empty())
+    for (const PlayerCallback& cb : moveCbs)
     {
-        for (const PlayerCallback& cb : m_moveCallbacks)
+        if (cb)
         {
-            if (cb)
-            {
-                cb(it->second);
-            }
+            cb(player);
         }
     }
 }
 
 void PlayerTracker::updatePlayerTransform(int64_t runtimeId, const float pos[3], float pitch, float yaw, float headYaw, bool onGround)
 {
-    std::lock_guard<std::recursive_mutex> lk(m_mutex);
-    if (m_runtimeIdToPlayer.empty())
+    std::shared_ptr<TrackedPlayer> player;
+    std::vector<PlayerCallback> moveCbs;
     {
-        return;
-    }
-    std::unordered_map<int64_t, std::shared_ptr<TrackedPlayer>>::const_iterator it = m_runtimeIdToPlayer.find(runtimeId);
-    if (it == m_runtimeIdToPlayer.end() || !it->second)
-    {
-        return;
+        std::lock_guard<std::recursive_mutex> lk(m_mutex);
+        if (m_runtimeIdToPlayer.empty())
+        {
+            return;
+        }
+        std::unordered_map<int64_t, std::shared_ptr<TrackedPlayer>>::const_iterator it = m_runtimeIdToPlayer.find(runtimeId);
+        if (it == m_runtimeIdToPlayer.end() || !it->second)
+        {
+            return;
+        }
+
+        it->second->updateTransform(pos, pitch, yaw, headYaw, onGround);
+        player = it->second;
+        moveCbs = m_moveCallbacks;
     }
 
-    it->second->updateTransform(pos, pitch, yaw, headYaw, onGround);
-    if (!m_moveCallbacks.empty())
+    for (const PlayerCallback& cb : moveCbs)
     {
-        for (const PlayerCallback& cb : m_moveCallbacks)
+        if (cb)
         {
-            if (cb)
-            {
-                cb(it->second);
-            }
+            cb(player);
         }
     }
 }
@@ -230,22 +247,27 @@ void PlayerTracker::removePlayer(int64_t runtimeId)
 
 void PlayerTracker::removePlayerByUuid(std::string_view uuid)
 {
-    std::lock_guard<std::recursive_mutex> lk(m_mutex);
-    std::unordered_map<std::string, std::shared_ptr<TrackedPlayer>>::iterator it = m_players.find(std::string(uuid));
-    if (it != m_players.end())
+    std::shared_ptr<TrackedPlayer> player;
+    std::vector<PlayerCallback> leaveCbs;
     {
-        std::shared_ptr<TrackedPlayer> player = it->second;
-        unbindPlayerIndices(player);
-        m_players.erase(it);
-
-        if (player)
+        std::lock_guard<std::recursive_mutex> lk(m_mutex);
+        std::unordered_map<std::string, std::shared_ptr<TrackedPlayer>>::iterator it = m_players.find(std::string(uuid));
+        if (it != m_players.end())
         {
-            for (const PlayerCallback& cb : m_leaveCallbacks)
+            player = it->second;
+            unbindPlayerIndices(player);
+            m_players.erase(it);
+            leaveCbs = m_leaveCallbacks;
+        }
+    }
+
+    if (player)
+    {
+        for (const PlayerCallback& cb : leaveCbs)
+        {
+            if (cb)
             {
-                if (cb)
-                {
-                    cb(player);
-                }
+                cb(player);
             }
         }
     }
@@ -406,6 +428,7 @@ void PlayerTracker::shutdown()
     m_spawnCallbacks.clear();
     m_despawnCallbacks.clear();
     m_moveCallbacks.clear();
+    m_initialized = false;
 }
 
 void PlayerTracker::onPlayerJoin(PlayerCallback cb)
@@ -465,34 +488,43 @@ void PlayerTracker::init()
                     cleanName = entry.name;
                 }
 
-                std::lock_guard<std::recursive_mutex> lk(m_mutex);
+                std::shared_ptr<TrackedPlayer> player;
+                std::vector<PlayerCallback> joinCbs;
                 bool isNew = false;
-                std::shared_ptr<TrackedPlayer> player = getOrCreatePlayerLocked(uuidStr, isNew);
+                {
+                    std::lock_guard<std::recursive_mutex> lk(m_mutex);
+                    player = getOrCreatePlayerLocked(uuidStr, isNew);
 
-                if (!cleanName.empty())
-                {
-                    player->name = cleanName;
-                }
-                if (!entry.xuid.empty())
-                {
-                    player->xuid = entry.xuid;
-                }
-                if (!entry.platformOnlineId.empty())
-                {
-                    player->platformOnlineId = entry.platformOnlineId;
-                }
-                if (entry.entityId != 0)
-                {
-                    player->uniqueEntityId = entry.entityId;
-                }
-                player->buildPlatform = static_cast<SDK::BuildPlatform>(entry.buildPlatform);
-                player->lastSeen = std::chrono::steady_clock::now();
+                    if (!cleanName.empty())
+                    {
+                        player->name = cleanName;
+                    }
+                    if (!entry.xuid.empty())
+                    {
+                        player->xuid = entry.xuid;
+                    }
+                    if (!entry.platformOnlineId.empty())
+                    {
+                        player->platformOnlineId = entry.platformOnlineId;
+                    }
+                    if (entry.entityId != 0)
+                    {
+                        player->uniqueEntityId = entry.entityId;
+                    }
+                    player->buildPlatform = static_cast<SDK::BuildPlatform>(entry.buildPlatform);
+                    player->lastSeen = std::chrono::steady_clock::now();
 
-                bindPlayerIndices(player);
+                    bindPlayerIndices(player);
 
-                if (isNew)
+                    if (isNew)
+                    {
+                        joinCbs = m_joinCallbacks;
+                    }
+                }
+
+                if (isNew && player)
                 {
-                    for (const PlayerCallback& cb : m_joinCallbacks)
+                    for (const PlayerCallback& cb : joinCbs)
                     {
                         if (cb)
                         {
@@ -526,6 +558,8 @@ void PlayerTracker::init()
 
         std::string_view rawNametag = ctx.packet->getNametag();
         std::shared_ptr<TrackedPlayer> player;
+        std::vector<PlayerCallback> joinCbs;
+        std::vector<PlayerCallback> spawnCbs;
         bool isNew = false;
 
         {
@@ -536,9 +570,11 @@ void PlayerTracker::init()
             {
                 player->name = rawName;
             }
-            if (ctx.packet->uniqueEntityId != 0)
+
+            int64_t uniqueId = ctx.packet->getUniqueEntityId();
+            if (uniqueId != 0 && player->uniqueEntityId == 0)
             {
-                player->uniqueEntityId = ctx.packet->uniqueEntityId;
+                player->uniqueEntityId = uniqueId;
             }
 
             player->runtimeEntityId = runtimeId;
@@ -562,13 +598,19 @@ void PlayerTracker::init()
 
             player->lastSeen = std::chrono::steady_clock::now();
             bindPlayerIndices(player);
+
+            if (isNew)
+            {
+                joinCbs = m_joinCallbacks;
+            }
+            spawnCbs = m_spawnCallbacks;
         }
 
         if (player)
         {
             if (isNew)
             {
-                for (const PlayerCallback& cb : m_joinCallbacks)
+                for (const PlayerCallback& cb : joinCbs)
                 {
                     if (cb)
                     {
@@ -577,7 +619,7 @@ void PlayerTracker::init()
                 }
             }
 
-            for (const PlayerCallback& cb : m_spawnCallbacks)
+            for (const PlayerCallback& cb : spawnCbs)
             {
                 if (cb)
                 {
@@ -632,6 +674,7 @@ void PlayerTracker::init()
 
         int64_t removedId = ctx.packet->uniqueEntityId;
         TrackedPlayer playerDataCopy;
+        std::vector<PlayerDespawnCallback> despawnCbs;
         bool hasData = false;
 
         {
@@ -654,12 +697,13 @@ void PlayerTracker::init()
                 }
                 player->isSpawned = false;
                 player->lastSeen = std::chrono::steady_clock::now();
+                despawnCbs = m_despawnCallbacks;
             }
         }
 
         if (hasData)
         {
-            for (const PlayerDespawnCallback& cb : m_despawnCallbacks)
+            for (const PlayerDespawnCallback& cb : despawnCbs)
             {
                 if (cb)
                 {

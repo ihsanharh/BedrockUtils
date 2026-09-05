@@ -3,7 +3,6 @@
 #include "Game.h"
 #include "Logger.h"
 #include "SafeString.h"
-#include "packets/AvailableCommandsPacket.h"
 #include "packets/CommandRequestPacket.h"
 #include "packets/ModalFormRequestPacket.h"
 #include "packets/ModalFormResponsePacket.h"
@@ -82,14 +81,7 @@ void CommandManager::init()
         }
     });
 
-    // Listen for inbound AvailableCommandsPackets (0x4C)
-    Pipeline::get().on<AvailableCommandsPacket>([this](TypedPacketContext<AvailableCommandsPacket>& ctx)
-    {
-        if (ctx.dir == PacketDirection::Inbound)
-        {
-            handleInboundAvailableCommands(ctx);
-        }
-    });
+
 
     // Reset all pending/active commands on world transition, transfer, or disconnect
     Pipeline::get().on(PacketID::CHANGE_DIMENSION, [this](PacketContext& ctx)
@@ -130,118 +122,7 @@ void CommandManager::handleInboundCommandOutput(PacketContext& ctx)
     }
 }
 
-void CommandManager::handleInboundAvailableCommands(TypedPacketContext<AvailableCommandsPacket>& ctx)
-{
-    if (!ctx.packet)
-    {
-        return;
-    }
 
-    std::lock_guard<std::recursive_mutex> lk(m_mutex);
-    m_availableCommands.clear();
-    m_knownAliases.clear();
-
-    // Cache enum values
-    for (size_t i = 0; i < ctx.packet->enumValues.size(); ++i)
-    {
-        std::string_view ev = ctx.packet->enumValues[i].view();
-        if (!ev.empty())
-        {
-            m_knownAliases.insert(toLower(ev));
-        }
-    }
-
-    // Cache command definitions
-    for (size_t i = 0; i < ctx.packet->commands.size(); ++i)
-    {
-        const AvailableCommandsPacket::CommandData& cmd = ctx.packet->commands[i];
-        std::string name(cmd.getName());
-        if (name.empty())
-        {
-            continue;
-        }
-
-        AvailableCommandInfo info;
-        info.name = name;
-        info.description = std::string(cmd.getDescription());
-        info.flags = cmd.flags;
-        info.permission = cmd.permission;
-
-        m_availableCommands[toLower(name)] = std::move(info);
-    }
-
-    m_hasAvailableCommands = true;
-    SDK::Log::log("[CommandManager] AvailableCommandsPacket: Cached {} command(s) and {} alias(es) from server",
-        m_availableCommands.size(), m_knownAliases.size());
-}
-
-bool CommandManager::hasAvailableCommands() const
-{
-    std::lock_guard<std::recursive_mutex> lk(m_mutex);
-    return m_hasAvailableCommands;
-}
-
-bool CommandManager::isCommandAvailable(std::string_view command) const
-{
-    std::lock_guard<std::recursive_mutex> lk(m_mutex);
-    if (!m_hasAvailableCommands)
-    {
-        return false;
-    }
-
-    std::string base = extractBaseCommand(command);
-    if (base.empty())
-    {
-        return false;
-    }
-
-    if (m_availableCommands.find(base) != m_availableCommands.end() ||
-        m_knownAliases.find(base) != m_knownAliases.end())
-    {
-        return true;
-    }
-
-    // Common plural/singular fallback: e.g. "friends" -> "friend"
-    if (base.ends_with('s') && base.size() > 1)
-    {
-        std::string singular = base.substr(0, base.size() - 1);
-        if (m_availableCommands.find(singular) != m_availableCommands.end() ||
-            m_knownAliases.find(singular) != m_knownAliases.end())
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-std::vector<AvailableCommandInfo> CommandManager::getAvailableCommands() const
-{
-    std::lock_guard<std::recursive_mutex> lk(m_mutex);
-    std::vector<AvailableCommandInfo> res;
-    res.reserve(m_availableCommands.size());
-    for (const std::pair<const std::string, AvailableCommandInfo>& kv : m_availableCommands)
-    {
-        res.push_back(kv.second);
-    }
-    std::sort(res.begin(), res.end(), [](const AvailableCommandInfo& a, const AvailableCommandInfo& b)
-    {
-        return a.name < b.name;
-    });
-    return res;
-}
-
-std::optional<AvailableCommandInfo> CommandManager::getCommandInfo(std::string_view command) const
-{
-    std::lock_guard<std::recursive_mutex> lk(m_mutex);
-    std::string base = extractBaseCommand(command);
-    std::unordered_map<std::string, AvailableCommandInfo>::const_iterator it = m_availableCommands.find(base);
-    if (it != m_availableCommands.end())
-    {
-        return it->second;
-    }
-    return std::nullopt;
-}
 
 bool CommandManager::cancelPending(std::string_view command)
 {
@@ -742,9 +623,6 @@ void CommandManager::reset()
 
         m_activeRequests.clear();
         m_lastDispatchTime = {};
-        // NOTE: m_availableCommands / m_hasAvailableCommands are preserved across
-        // resets (dimension change, transfer, disconnect). They are only replaced
-        // when a new AvailableCommandsPacket (0x4C) arrives from the server.
     }
 
     for (std::pair<std::function<void(const CommandResult&)>, CommandResult>& item : toFire)
@@ -761,9 +639,6 @@ void CommandManager::shutdown()
     std::lock_guard<std::recursive_mutex> lk(m_mutex);
     m_pendingQueue.clear();
     m_activeRequests.clear();
-    m_availableCommands.clear();
-    m_knownAliases.clear();
-    m_hasAvailableCommands = false;
     m_lastDispatchTime = {};
 }
 

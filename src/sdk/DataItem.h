@@ -222,30 +222,128 @@ enum class EntityFlag : uint32_t
     LAYING_DOWN = 63
 };
 
-template<typename V> struct DataItemMap;
-template<> struct DataItemMap<bool>             { using item_type = ByteDataItem;   static constexpr uint8_t type_id = 0; };
-template<> struct DataItemMap<uint8_t>          { using item_type = ByteDataItem;   static constexpr uint8_t type_id = 0; };
-template<> struct DataItemMap<int8_t>           { using item_type = ByteDataItem;   static constexpr uint8_t type_id = 0; };
-template<> struct DataItemMap<int16_t>          { using item_type = ShortDataItem;  static constexpr uint8_t type_id = 1; };
-template<> struct DataItemMap<uint16_t>         { using item_type = ShortDataItem;  static constexpr uint8_t type_id = 1; };
-template<> struct DataItemMap<int32_t>          { using item_type = IntDataItem;    static constexpr uint8_t type_id = 2; };
-template<> struct DataItemMap<uint32_t>         { using item_type = IntDataItem;    static constexpr uint8_t type_id = 2; };
-template<> struct DataItemMap<float>            { using item_type = FloatDataItem;  static constexpr uint8_t type_id = 3; };
-template<> struct DataItemMap<double>           { using item_type = FloatDataItem;  static constexpr uint8_t type_id = 3; };
-template<> struct DataItemMap<std::string>      { using item_type = StringDataItem; static constexpr uint8_t type_id = 4; };
-template<> struct DataItemMap<std::string_view> { using item_type = StringDataItem; static constexpr uint8_t type_id = 4; };
-template<> struct DataItemMap<const char*>      { using item_type = StringDataItem; static constexpr uint8_t type_id = 4; };
-template<> struct DataItemMap<SafeString>       { using item_type = StringDataItem; static constexpr uint8_t type_id = 4; };
-template<> struct DataItemMap<int64_t>          { using item_type = LongDataItem;   static constexpr uint8_t type_id = 7; };
-template<> struct DataItemMap<uint64_t>         { using item_type = LongDataItem;   static constexpr uint8_t type_id = 7; };
+template<typename V>
+struct DataItemMap;
+
+template<>
+struct DataItemMap<bool>
+{
+    using item_type = ByteDataItem;
+    static constexpr uint8_t type_id = 0;
+};
+
+template<>
+struct DataItemMap<uint8_t>
+{
+    using item_type = ByteDataItem;
+    static constexpr uint8_t type_id = 0;
+};
+
+template<>
+struct DataItemMap<int8_t>
+{
+    using item_type = ByteDataItem;
+    static constexpr uint8_t type_id = 0;
+};
+
+template<>
+struct DataItemMap<int16_t>
+{
+    using item_type = ShortDataItem;
+    static constexpr uint8_t type_id = 1;
+};
+
+template<>
+struct DataItemMap<uint16_t>
+{
+    using item_type = ShortDataItem;
+    static constexpr uint8_t type_id = 1;
+};
+
+template<>
+struct DataItemMap<int32_t>
+{
+    using item_type = IntDataItem;
+    static constexpr uint8_t type_id = 2;
+};
+
+template<>
+struct DataItemMap<uint32_t>
+{
+    using item_type = IntDataItem;
+    static constexpr uint8_t type_id = 2;
+};
+
+template<>
+struct DataItemMap<float>
+{
+    using item_type = FloatDataItem;
+    static constexpr uint8_t type_id = 3;
+};
+
+template<>
+struct DataItemMap<double>
+{
+    using item_type = FloatDataItem;
+    static constexpr uint8_t type_id = 3;
+};
+
+template<>
+struct DataItemMap<std::string>
+{
+    using item_type = StringDataItem;
+    static constexpr uint8_t type_id = 4;
+};
+
+template<>
+struct DataItemMap<std::string_view>
+{
+    using item_type = StringDataItem;
+    static constexpr uint8_t type_id = 4;
+};
+
+template<>
+struct DataItemMap<const char*>
+{
+    using item_type = StringDataItem;
+    static constexpr uint8_t type_id = 4;
+};
+
+template<>
+struct DataItemMap<SafeString>
+{
+    using item_type = StringDataItem;
+    static constexpr uint8_t type_id = 4;
+};
+
+template<>
+struct DataItemMap<int64_t>
+{
+    using item_type = LongDataItem;
+    static constexpr uint8_t type_id = 7;
+};
+
+template<>
+struct DataItemMap<uint64_t>
+{
+    using item_type = LongDataItem;
+    static constexpr uint8_t type_id = 7;
+};
 
 class SynchedActorData
 {
 public:
     PODVector<DataItem*> items; // +0x00
 
-    size_t size() const { return items.size(); }
-    bool empty() const { return items.empty(); }
+    [[nodiscard]] size_t size() const noexcept
+    {
+        return items.size();
+    }
+
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return items.empty();
+    }
 
     const DataItem* getItem(uint16_t id) const
     {
@@ -297,11 +395,30 @@ public:
         return defaultVal;
     }
 
-    uint8_t  getByte(uint16_t id, uint8_t defaultVal = 0) const   { return get<uint8_t>(id, defaultVal); }
-    int16_t  getShort(uint16_t id, int16_t defaultVal = 0) const  { return get<int16_t>(id, defaultVal); }
-    int32_t  getInt(uint16_t id, int32_t defaultVal = 0) const    { return get<int32_t>(id, defaultVal); }
-    float    getFloat(uint16_t id, float defaultVal = 0.0f) const { return get<float>(id, defaultVal); }
-    int64_t  getInt64(uint16_t id, int64_t defaultVal = 0) const  { return get<int64_t>(id, defaultVal); }
+    [[nodiscard]] uint8_t getByte(uint16_t id, uint8_t defaultVal = 0) const
+    {
+        return get<uint8_t>(id, defaultVal);
+    }
+
+    [[nodiscard]] int16_t getShort(uint16_t id, int16_t defaultVal = 0) const
+    {
+        return get<int16_t>(id, defaultVal);
+    }
+
+    [[nodiscard]] int32_t getInt(uint16_t id, int32_t defaultVal = 0) const
+    {
+        return get<int32_t>(id, defaultVal);
+    }
+
+    [[nodiscard]] float getFloat(uint16_t id, float defaultVal = 0.0f) const
+    {
+        return get<float>(id, defaultVal);
+    }
+
+    [[nodiscard]] int64_t getInt64(uint16_t id, int64_t defaultVal = 0) const
+    {
+        return get<int64_t>(id, defaultVal);
+    }
 
     bool getFlag(uint32_t flagIndex) const
     {

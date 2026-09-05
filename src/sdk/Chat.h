@@ -33,6 +33,7 @@ inline void send(std::string_view message)
     tp->needsTranslation = false;
     tp->sourceName = message;
     tp->message = message;
+    tp->variantIndex = 0;
     tp->xuid.clear();
     tp->platformChatId.clear();
 
@@ -60,6 +61,7 @@ inline void sendChat(std::string_view author, std::string_view message)
     tp->needsTranslation = false;
     tp->sourceName = author;
     tp->message = message;
+    tp->variantIndex = 1;
     tp->xuid.clear();
     tp->platformChatId.clear();
 

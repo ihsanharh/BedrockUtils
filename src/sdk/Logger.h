@@ -105,7 +105,6 @@ public:
         if (m_logFile.is_open())
         {
             m_logFile << msg << "\n";
-            m_logFile.flush();
         }
 
         // 3. Write to OutputDebugString for debugger / DebugView

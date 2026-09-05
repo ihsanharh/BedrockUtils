@@ -19,8 +19,14 @@ struct PacketContext
     std::string dropReason{};
 
     // Direction queries
-    [[nodiscard]] bool isInbound()  const noexcept { return dir == PacketDirection::Inbound; }
-    [[nodiscard]] bool isOutbound() const noexcept { return dir == PacketDirection::Outbound; }
+    [[nodiscard]] bool isInbound() const noexcept
+    {
+        return dir == PacketDirection::Inbound;
+    }
+    [[nodiscard]] bool isOutbound() const noexcept
+    {
+        return dir == PacketDirection::Outbound;
+    }
 
     SDK::PacketID id() const noexcept
     {

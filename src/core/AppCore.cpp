@@ -159,6 +159,9 @@ void tick()
             ModuleRegistry::get().tick();
         }
 
+        SDK::Crash::g_lastCheckpoint.store("PacketInterceptor::flushInbound");
+        PacketInterceptor::get().flushInbound();
+
         SDK::Crash::g_lastCheckpoint.store("AppCore::tick complete");
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
