@@ -1,55 +1,61 @@
 # BedrockUtils
 
-A modular DLL utility framework for **Minecraft Bedrock Edition (Windows x64)**. It hooks into the game's packet layer at runtime, giving you a clean foundation to intercept, inspect, and modify packets — both inbound and outbound — without patching the binary.
+BedrockUtils is an internal mod DLL for **Minecraft Bedrock Edition (Windows x64)** (supported version is **26.4x**). It operates as an in-process Man-in-the-Middle (MITM) that hooks directly into the game's network layer to intercept, inspect, modify, and dispatch packets in real time without external proxies or binary patching.
 
-Modules are self-registering and fully isolated. Adding a new one is just dropping a `.cpp` file.
+Every module inside the client is self-contained and self-registering. Adding or extending functionality is as simple as creating a single C++ source file.
+
+For the complete guide on writing modules, packet structures, memory layouts, coding standards, and the full SDK reference, see the [Developer Documentation](DEVELOPER.md).
 
 ---
 
-## Building
+## Building the Project
 
-### Windows (MSVC)
+### On Windows using Visual Studio
 
 ```bash
 cmake -B build
 cmake --build build --config Release
 ```
 
-### Linux (Cross-compile with clang-cl + xwin)
+### Cross-compiling on Linux with Clang and xwin
 
-You'll need an MSVC sysroot. The easiest way to get one is [xwin](https://github.com/Jake-Shadle/xwin):
+Cross-compilation requires an MSVC sysroot. You can obtain one easily using [xwin](https://github.com/Jake-Shadle/xwin):
 
 ```bash
 cargo install xwin
 xwin --accept-license splat --output ~/msvc_sysroot
 ```
 
-Then:
+Then configure and compile using the included toolchain file:
 
 ```bash
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake
 cmake --build build
 ```
 
-The toolchain resolves the sysroot automatically in this order:
-1. `-DXWIN_DIR=/path` on the command line
-2. `XWIN_DIR` environment variable
-3. `~/Projects/msvc_sysroot` or `~/msvc_sysroot`
+The toolchain automatically locates the sysroot via command-line arguments (`-DXWIN_DIR=/path`), the `XWIN_DIR` environment variable, or default directory locations like `~/Projects/msvc_sysroot`.
 
-### CI
+### Continuous Integration
 
-Every push automatically builds on `windows-latest` via GitHub Actions. The resulting `BedrockUtils.dll` is uploaded as an artifact on every successful run.
+Every commit triggers an automated build on `windows-latest` via GitHub Actions. The compiled `BedrockUtils.dll` binary is published as a downloadable workflow artifact on every run.
 
 ---
 
-## Usage
+## How to Run
 
-1. Build or grab `BedrockUtils.dll` from the latest Actions run.
-2. Inject into `Minecraft.Windows.exe` with any DLL injector.
-3. The mod initializes and hooks automatically on attach.
+1. Build or download the latest `BedrockUtils.dll` binary.
+2. Launch Minecraft Bedrock Edition.
+3. Inject the DLL into `Minecraft.Windows.exe` using any standard DLL injector.
+4. Open the in-game chat and type `;;help` to see the roster of available commands.
+
+---
+
+## Documentation
+
+Full documentation, code snippets, architecture details, and SDK references are available in [DEVELOPER.md](DEVELOPER.md).
 
 ---
 
 ## Disclaimer
 
-For educational and research purposes only. Use responsibly.
+This project is created for educational and reverse-engineering research purposes. Please use it responsibly.

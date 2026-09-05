@@ -236,7 +236,7 @@ inline HttpResponse request(
     HttpResponse response;
 
     HINTERNET hInternet = InternetOpenW(
-        L"BedrockUtils/1.0",
+        L"BedrockUtils",
         INTERNET_OPEN_TYPE_PRECONFIG,
         nullptr,
         nullptr,
@@ -246,7 +246,7 @@ inline HttpResponse request(
     if (!hInternet)
     {
         hInternet = InternetOpenW(
-            L"BedrockUtils/1.0",
+            L"BedrockUtils",
             INTERNET_OPEN_TYPE_DIRECT,
             nullptr,
             nullptr,

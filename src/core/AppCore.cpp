@@ -48,7 +48,7 @@ void start()
     SDK::Async::init();
 
     SDK::Log::log("==============================");
-    SDK::Log::log("     BedrockUtils  v0.2       ");
+    SDK::Log::log("         BedrockUtils         ");
     SDK::Log::log("==============================");
 
     SDK::Crash::g_lastCheckpoint.store("PacketInterceptor::install");
