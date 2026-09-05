@@ -10,7 +10,6 @@
 
 namespace SDK
 {
-    class CommandRequestPacket;
     class TextPacket;
 }
 
@@ -70,6 +69,23 @@ struct RegisteredCommand
 class CommandDispatcher
 {
 public:
+    static constexpr std::string_view kPrefix = ";;";
+
+    [[nodiscard]] static constexpr std::string_view prefix() noexcept
+    {
+        return kPrefix;
+    }
+
+    [[nodiscard]] static bool isCommandPrefix(std::string_view text) noexcept
+    {
+        return text.starts_with(kPrefix) && (text.size() == kPrefix.size() || text[kPrefix.size()] != kPrefix.front());
+    }
+
+    [[nodiscard]] static std::string_view stripPrefix(std::string_view text) noexcept
+    {
+        return text.substr(kPrefix.size());
+    }
+
     static CommandDispatcher& get()
     {
         static CommandDispatcher inst;
@@ -100,7 +116,6 @@ private:
     CommandDispatcher() = default;
     ~CommandDispatcher() = default;
 
-    void handleOutboundCommandRequest(TypedPacketContext<SDK::CommandRequestPacket>& ctx);
     void handleOutboundChat(TypedPacketContext<SDK::TextPacket>& ctx);
 
     mutable std::mutex m_mutex;

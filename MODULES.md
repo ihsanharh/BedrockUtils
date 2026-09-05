@@ -189,7 +189,7 @@ void MyFeature::onLoad()
 }
 ```
 
-Invoked by the user as `//hello` or `//hello Ihsan`.
+Invoked by the user as `;;hello` or `;;hello Ihsan`.
 
 `CommandArgs` helpers:
 ```cpp
@@ -197,7 +197,7 @@ args.empty()        // true if no arguments
 args.size()         // number of arguments
 args.get(0)         // get argument at index (returns string_view, empty if out of range)
 args.rawCommand     // the full raw input string
-args.commandName    // the command name without slashes
+args.commandName    // the command name without prefix
 ```
 
 ---
@@ -245,7 +245,7 @@ Pick the one that best fits your module:
 
 ## Full Example
 
-A module that logs every inbound chat message and adds a `//lastseen` command:
+A module that logs every inbound chat message and adds a `;;lastseen` command:
 
 ```cpp
 // src/modules/player/ChatLogger.cpp

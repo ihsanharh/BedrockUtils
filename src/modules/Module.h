@@ -133,7 +133,7 @@ public:
         return h;
     }
 
-    // Client double-slash (//) command registration helper
+    // Client double semicolon (;;) command registration helper
     void registerCommand(
         std::string_view cmdName,
         std::string_view desc,

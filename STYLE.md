@@ -192,7 +192,7 @@ This repository (`BedrockUtils`) follows strict C++20 conventions and design pri
   SDK::Chat::error("Command execution failed.");
   SDK::Chat::moduleNotify(name(), "Toggled to new mode.");
   ```
-  Only use raw `SDK::Chat::send(...)` for custom multi-line formatted tables (such as the `//modules` roster).
+  Only use raw `SDK::Chat::send(...)` for custom multi-line formatted tables (such as the `;;modules` roster).
 
 ---
 

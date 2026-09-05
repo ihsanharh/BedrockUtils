@@ -3,7 +3,6 @@
 #include "pipeline/PacketContext.h"
 #include "pipeline/Pipeline.h"
 #include "sdk/SafeString.h"
-#include "sdk/packets/CommandRequestPacket.h"
 #include "sdk/packets/TextPacket.h"
 #include "sdk/Chat.h"
 #include "sdk/Logger.h"
@@ -19,16 +18,7 @@ void CommandDispatcher::init()
     }
     m_initialized = true;
 
-    // Outbound slash command interception (Minecraft /cmd requests that start with //)
-    Pipeline::get().on<SDK::CommandRequestPacket>([this](TypedPacketContext<SDK::CommandRequestPacket>& ctx)
-    {
-        if (ctx.dir == PacketDirection::Outbound && ctx.packet)
-        {
-            handleOutboundCommandRequest(ctx);
-        }
-    });
-
-    // Outbound chat interception (standard chat messages that start with //)
+    // Outbound chat interception (standard chat messages starting with ';;')
     Pipeline::get().on<SDK::TextPacket>([this](TypedPacketContext<SDK::TextPacket>& ctx)
     {
         if (ctx.dir == PacketDirection::Outbound && ctx.packet)
@@ -54,9 +44,9 @@ void CommandDispatcher::registerCommand(
     CommandFlags flags)
 {
     std::string lowerName = SDK::toLower(name);
-    while (lowerName.starts_with("/"))
+    while (lowerName.starts_with(kPrefix))
     {
-        lowerName.erase(0, 1);
+        lowerName.erase(0, kPrefix.size());
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -69,15 +59,15 @@ void CommandDispatcher::registerCommand(
         .flags = flags
     };
 
-    SDK::Log::log("[CommandDispatcher] Registered command: //{}", lowerName);
+    SDK::Log::log("[CommandDispatcher] Registered command: {}{}", kPrefix, lowerName);
 }
 
 void CommandDispatcher::unregisterCommand(std::string_view name)
 {
     std::string lowerName = SDK::toLower(name);
-    while (lowerName.starts_with("/"))
+    while (lowerName.starts_with(kPrefix))
     {
-        lowerName.erase(0, 1);
+        lowerName.erase(0, kPrefix.size());
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -115,9 +105,9 @@ std::vector<RegisteredCommand> CommandDispatcher::getCommands() const
 bool CommandDispatcher::isCommandRegistered(std::string_view name) const
 {
     std::string lowerName = SDK::toLower(name);
-    while (lowerName.starts_with("/"))
+    while (lowerName.starts_with(kPrefix))
     {
-        lowerName.erase(0, 1);
+        lowerName.erase(0, kPrefix.size());
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -128,38 +118,20 @@ bool CommandDispatcher::dispatch(std::string_view rawInput)
 {
     std::string clean = SDK::stripColorCodes(rawInput);
     std::string_view input = SDK::trim(clean);
-    if (input.empty())
+    if (input.empty() || !isCommandPrefix(input))
     {
         return false;
     }
 
-    const bool isExplicitDoubleSlash = input.starts_with("//");
-    const bool isSlash = input.starts_with("/");
-
-    // Commands must start with / or // to qualify as a command input
-    if (!isSlash && !isExplicitDoubleSlash)
-    {
-        return false;
-    }
-
-    // Strip leading slashes to extract command token (e.g. //help, /help -> help)
-    std::string_view stripped = input;
-    while (stripped.starts_with("/"))
-    {
-        stripped.remove_prefix(1);
-    }
+    std::string_view stripped = stripPrefix(input);
 
     std::string inputStr(stripped);
     std::istringstream stream(inputStr);
     std::string cmdName;
     if (!(stream >> cmdName))
     {
-        if (isExplicitDoubleSlash)
-        {
-            SDK::Chat::warn("Type §f//help§e or §f//modules§e for available commands.");
-            return true;
-        }
-        return false;
+        SDK::Chat::warn(std::format("Type §f{}help§e or §f{}modules§e for available commands.", kPrefix, kPrefix));
+        return true;
     }
 
     std::string lowerCmd = SDK::toLower(cmdName);
@@ -177,20 +149,16 @@ bool CommandDispatcher::dispatch(std::string_view rawInput)
     }
 
     // If not found in registered client commands:
-    // - If typed with explicit double slash (//cmd), drop it and report unknown client command (prevents leaking to server).
-    // - If typed with single slash (/cmd), pass through to the server command system.
+    // Drop the message and report unknown command so it does NOT leak to server chat.
     if (!found)
     {
-        if (isExplicitDoubleSlash)
-        {
-            SDK::Log::log("[CommandDispatcher] Unknown double-slash command: //{} (raw: '{}')", lowerCmd, rawInput);
-            SDK::Chat::error(std::format("Unknown command '§f//{}§c'. Type §f//help§c for a list of commands.", lowerCmd));
-            return true;
-        }
-        return false;
+        SDK::Log::log("[CommandDispatcher] Unknown command: {}{} (raw: '{}')", kPrefix, lowerCmd, rawInput);
+        SDK::Chat::error(std::format("Unknown command '§f{}{}{}§c'. Type §f{}help§c for a list of commands.",
+            kPrefix, lowerCmd, "§r", kPrefix));
+        return true;
     }
 
-    SDK::Log::log("[CommandDispatcher] Executing command: //{} (raw: '{}')", lowerCmd, rawInput);
+    SDK::Log::log("[CommandDispatcher] Executing command: {}{} (raw: '{}')", kPrefix, lowerCmd, rawInput);
 
     // Check module enabled state if required by flags
     if (cmd.flags & CommandFlags::RequiresEnabled)
@@ -198,8 +166,8 @@ bool CommandDispatcher::dispatch(std::string_view rawInput)
         if (cmd.enabledGate && !cmd.enabledGate->load(std::memory_order_relaxed))
         {
             std::string modDisplay = cmd.owningModuleName.empty() ? cmd.name : cmd.owningModuleName;
-            SDK::Chat::error(std::format("Module '§f{}§c' is disabled. Type §f//toggle {}§c to enable.",
-                modDisplay, modDisplay));
+            SDK::Chat::error(std::format("Module '§f{}§c' is disabled. Type §f{}toggle {}§c to enable.",
+                modDisplay, kPrefix, modDisplay));
             return true;
         }
     }
@@ -224,39 +192,11 @@ bool CommandDispatcher::dispatch(std::string_view rawInput)
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
-        SDK::Log::log("[CommandDispatcher] Handled exception executing command: //{}", lowerCmd);
-        SDK::Chat::error(std::format("An error occurred executing //{}", lowerCmd));
+        SDK::Log::log("[CommandDispatcher] Handled exception executing command: {}{}", kPrefix, lowerCmd);
+        SDK::Chat::error(std::format("An error occurred executing {}{}", kPrefix, lowerCmd));
     }
 
     return true;
-}
-
-void CommandDispatcher::handleOutboundCommandRequest(TypedPacketContext<SDK::CommandRequestPacket>& ctx)
-{
-    if (!ctx.packet)
-    {
-        return;
-    }
-
-    std::string cmdStr = ctx.packet->command.str();
-    if (cmdStr.empty())
-    {
-        const uint8_t* base = reinterpret_cast<const uint8_t*>(ctx.packet);
-        for (size_t off = 0x28; off <= 0x48; off += 8)
-        {
-            if (SDK::safeReadString(base + off, cmdStr) && !cmdStr.empty())
-            {
-                break;
-            }
-        }
-    }
-
-    SDK::Log::log("[CommandDispatcher] Outbound CommandRequest: '{}'", cmdStr);
-
-    if (dispatch(cmdStr))
-    {
-        ctx.drop("Executed client command");
-    }
 }
 
 void CommandDispatcher::handleOutboundChat(TypedPacketContext<SDK::TextPacket>& ctx)
@@ -273,7 +213,7 @@ void CommandDispatcher::handleOutboundChat(TypedPacketContext<SDK::TextPacket>& 
     {
         std::string clean = SDK::stripColorCodes(text);
         std::string_view trimmed = SDK::trim(clean);
-        if (trimmed.starts_with("//") || trimmed.starts_with("/"))
+        if (isCommandPrefix(trimmed))
         {
             SDK::Log::log("[CommandDispatcher] Outbound chat command candidate: '{}'", trimmed);
             if (dispatch(trimmed))

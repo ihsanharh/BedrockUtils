@@ -73,7 +73,7 @@ void start()
     ModuleRegistry::get().init();
 
     SDK::Log::log("[AppCore] {} module(s) loaded", ModuleRegistry::get().all().size());
-    SDK::Log::log("[AppCore] Press DELETE or type //eject to eject");
+    SDK::Log::log("[AppCore] Press DELETE or type {}eject to eject", CommandDispatcher::prefix());
 
     SDK::Crash::g_lastCheckpoint.store("AppCore::start complete");
 
@@ -88,7 +88,8 @@ void start()
         if (PacketInterceptor::get().hasActiveSession())
         {
             g_hasAnnouncedInGame = true;
-            SDK::Chat::send("§a§l[BedrockUtils]§r §7Loaded successfully. Type §f//modules§7 or §f//eject§7.");
+            SDK::Chat::send(std::format("§a§l[BedrockUtils]§r §7Loaded successfully. Type §f{}modules§7 or §f{}eject§7.",
+                CommandDispatcher::prefix(), CommandDispatcher::prefix()));
         }
     }
 }
@@ -144,7 +145,8 @@ void tick()
         if (!g_hasAnnouncedInGame && inWorld && PacketInterceptor::get().hasActiveSession())
         {
             g_hasAnnouncedInGame = true;
-            SDK::Chat::send("§a§l[BedrockUtils]§r §7Loaded successfully. Type §f//modules§7 or §f//eject§7.");
+            SDK::Chat::send(std::format("§a§l[BedrockUtils]§r §7Loaded successfully. Type §f{}modules§7 or §f{}eject§7.",
+                CommandDispatcher::prefix(), CommandDispatcher::prefix()));
         }
 
         // Tick CommandManager and active modules
