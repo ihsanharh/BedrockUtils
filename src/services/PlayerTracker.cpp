@@ -480,12 +480,21 @@ void PlayerTracker::init()
         for (const SDK::PlayerListPacket::Entry& entry : ctx.packet->entries)
         {
             std::string uuidStr = SDK::uuidToString(entry.uuid);
+            if (uuidStr.empty() || uuidStr == "00000000-0000-0000-0000-000000000000")
+            {
+                continue;
+            }
+
             if (entry.action == 0) // ADD
             {
                 std::string cleanName = SDK::stripColorCodes(entry.name);
                 if (cleanName.empty())
                 {
-                    cleanName = entry.name;
+                    cleanName = entry.name.str();
+                }
+                if (cleanName.empty())
+                {
+                    continue;
                 }
 
                 std::shared_ptr<TrackedPlayer> player;

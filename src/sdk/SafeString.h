@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <iostream>
@@ -169,14 +170,15 @@ struct SafeString
         }
         else
         {
-            char* heapBuf = static_cast<char*>(HeapAlloc(GetProcessHeap(), 0, sv.size() + 1));
+            size_t newCap = (sv.size() | 0x0F);
+            char* heapBuf = static_cast<char*>(std::malloc(newCap + 1));
             if (heapBuf)
             {
                 std::memcpy(heapBuf, sv.data(), sv.size());
                 heapBuf[sv.size()] = '\0';
                 ptr = heapBuf;
                 size = sv.size();
-                res = sv.size();
+                res = newCap;
             }
             else
             {
