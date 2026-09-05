@@ -16,32 +16,7 @@ static std::vector<std::shared_ptr<SDK::Packet>> s_startupPackets;
 static std::deque<std::shared_ptr<SDK::Packet>>  s_heldInbound;
 static std::mutex                                s_heldMutex;
 
-// Helper to get packet name from ID
-static const char* getPacketName(SDK::PacketID id)
-{
-    switch (id)
-    {
-    case SDK::PacketID::NONE:                  return "NONE";
-    case SDK::PacketID::PLAY_STATUS:           return "PLAY_STATUS";
-    case SDK::PacketID::DISCONNECT:            return "DISCONNECT";
-    case SDK::PacketID::TEXT:                  return "TEXT";
-    case SDK::PacketID::ADD_PLAYER:            return "ADD_PLAYER";
-    case SDK::PacketID::ADD_ACTOR:             return "ADD_ACTOR";
-    case SDK::PacketID::REMOVE_ACTOR:          return "REMOVE_ACTOR";
-    case SDK::PacketID::MOVE_ACTOR_ABSOLUTE:   return "MOVE_ACTOR_ABSOLUTE";
-    case SDK::PacketID::MOVE_PLAYER:           return "MOVE_PLAYER";
-    case SDK::PacketID::CHANGE_DIMENSION:      return "CHANGE_DIMENSION";
-    case SDK::PacketID::PLAYER_LIST:           return "PLAYER_LIST";
-    case SDK::PacketID::AVAILABLE_COMMANDS:    return "AVAILABLE_COMMANDS";
-    case SDK::PacketID::COMMAND_REQUEST:       return "COMMAND_REQUEST";
-    case SDK::PacketID::COMMAND_OUTPUT:        return "COMMAND_OUTPUT";
-    case SDK::PacketID::TRANSFER:              return "TRANSFER";
-    case SDK::PacketID::MODAL_FORM_REQUEST:    return "MODAL_FORM_REQUEST";
-    case SDK::PacketID::MODAL_FORM_RESPONSE:   return "MODAL_FORM_RESPONSE";
-    case SDK::PacketID::MOVE_ACTOR_DELTA:      return "MOVE_ACTOR_DELTA";
-    default:                                   return "UNKNOWN";
-    }
-}
+using SDK::getPacketName;
 
 static std::string formatNetId(void* netId)
 {

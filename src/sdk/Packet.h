@@ -28,6 +28,32 @@ enum class PacketID : uint8_t
     COUNT,
 };
 
+[[nodiscard]] constexpr const char* getPacketName(PacketID id) noexcept
+{
+    switch (id)
+    {
+    case PacketID::NONE:                return "NONE";
+    case PacketID::PLAY_STATUS:         return "PLAY_STATUS";
+    case PacketID::DISCONNECT:          return "DISCONNECT";
+    case PacketID::TEXT:                return "TEXT";
+    case PacketID::ADD_PLAYER:          return "ADD_PLAYER";
+    case PacketID::ADD_ACTOR:           return "ADD_ACTOR";
+    case PacketID::REMOVE_ACTOR:        return "REMOVE_ACTOR";
+    case PacketID::MOVE_ACTOR_ABSOLUTE: return "MOVE_ACTOR_ABSOLUTE";
+    case PacketID::MOVE_PLAYER:         return "MOVE_PLAYER";
+    case PacketID::CHANGE_DIMENSION:    return "CHANGE_DIMENSION";
+    case PacketID::PLAYER_LIST:         return "PLAYER_LIST";
+    case PacketID::AVAILABLE_COMMANDS:  return "AVAILABLE_COMMANDS";
+    case PacketID::COMMAND_REQUEST:     return "COMMAND_REQUEST";
+    case PacketID::COMMAND_OUTPUT:      return "COMMAND_OUTPUT";
+    case PacketID::TRANSFER:            return "TRANSFER";
+    case PacketID::MODAL_FORM_REQUEST:  return "MODAL_FORM_REQUEST";
+    case PacketID::MODAL_FORM_RESPONSE: return "MODAL_FORM_RESPONSE";
+    case PacketID::MOVE_ACTOR_DELTA:    return "MOVE_ACTOR_DELTA";
+    default:                            return "UNKNOWN";
+    }
+}
+
 // base packet layout in minecraft bedrock
 class Packet
 {

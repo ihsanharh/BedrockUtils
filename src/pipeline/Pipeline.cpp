@@ -1,5 +1,6 @@
 #include "Pipeline.h"
 #include "pch.h"
+#include "services/PacketDumper.h"
 #include <algorithm>
 
 static bool invokeHandlerSafe(const PacketHandler& fn, PacketContext& ctx)
@@ -80,6 +81,8 @@ void Pipeline::clear()
 
 bool Pipeline::process(PacketContext& ctx)
 {
+    SDK::PacketDumper::get().checkPacket(ctx);
+
     SDK::PacketID pktId = ctx.id();
     uint8_t rawId = static_cast<uint8_t>(pktId);
 

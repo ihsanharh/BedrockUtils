@@ -12,6 +12,7 @@
 #include "sdk/SafeString.h"
 #include "sdk/packets/AddActorPacket.h"
 #include "sdk/packets/TextPacket.h"
+#include "services/PacketDumper.h"
 #include "services/PlayerTracker.h"
 #include <atomic>
 #include <format>
@@ -427,6 +428,102 @@ void CoreCommands::onLoad()
         SDK::CommandManager::get().execute(std::move(req));
     };
     registerCommand("trycmd", "Execute server command via CommandManager and capture response", tryCmdCb);
+
+    // Dump command
+    CommandCallback dumpCb = [](const CommandArgs& args)
+    {
+        std::string_view pfx = CommandDispatcher::prefix();
+        if (args.empty())
+        {
+            SDK::Chat::warn(std::format("Usage: {}dump <in|out|any> <packetId> [bytes]", pfx));
+            SDK::Chat::warn(std::format("Examples: §f{}dump in 1§e, §f{}dump out 9§e, §f{}dump text§e, §f{}dump cancel", pfx, pfx, pfx, pfx));
+            return;
+        }
+
+        std::string_view first = args.get(0);
+        std::string firstLower = SDK::toLower(first);
+        if (firstLower == "cancel" || firstLower == "stop")
+        {
+            SDK::PacketDumper::get().disarm();
+            SDK::Chat::notify("Packet dumper disarmed.");
+            return;
+        }
+
+        if (firstLower == "status")
+        {
+            if (SDK::PacketDumper::get().isArmed())
+            {
+                uint8_t tid = SDK::PacketDumper::get().targetPacketId();
+                PacketDirection tdir = SDK::PacketDumper::get().targetDirection();
+                std::string dirStr = (tdir == PacketDirection::Inbound) ? "INBOUND" : "OUTBOUND";
+                std::string name = SDK::getPacketName(static_cast<SDK::PacketID>(tid));
+                SDK::Chat::notify(std::format("Packet dumper is §aARMED§7 for {} packet §e0x{:02x} ({})§7.", dirStr, tid, name));
+            }
+            else
+            {
+                SDK::Chat::notify("Packet dumper is currently §cDISARMED§7.");
+            }
+            return;
+        }
+
+        PacketDirection dir = PacketDirection::Inbound;
+        bool anyDir = false;
+        size_t idArgIdx = 0;
+
+        if (firstLower == "in" || firstLower == "inbound")
+        {
+            dir = PacketDirection::Inbound;
+            idArgIdx = 1;
+        }
+        else if (firstLower == "out" || firstLower == "outbound")
+        {
+            dir = PacketDirection::Outbound;
+            idArgIdx = 1;
+        }
+        else if (firstLower == "any" || firstLower == "all")
+        {
+            anyDir = true;
+            idArgIdx = 1;
+        }
+
+        if (idArgIdx >= args.size())
+        {
+            SDK::Chat::warn(std::format("Missing packet ID. Usage: {}dump <in|out|any> <packetId> [bytes]", pfx));
+            return;
+        }
+
+        std::string_view idToken = args.get(idArgIdx);
+        uint8_t packetId = 0;
+        std::string packetName;
+        if (!SDK::PacketDumper::parsePacketId(idToken, packetId, packetName))
+        {
+            SDK::Chat::error(std::format("Unknown packet ID or name: '§f{}§c'.", idToken));
+            return;
+        }
+
+        size_t byteCount = 384;
+        if (args.size() > idArgIdx + 1)
+        {
+            std::string_view byteToken = args.get(idArgIdx + 1);
+            try
+            {
+                unsigned long parsedBytes = std::stoul(std::string(byteToken), nullptr, 10);
+                if (parsedBytes > 0)
+                {
+                    byteCount = static_cast<size_t>(parsedBytes);
+                }
+            }
+            catch (const std::exception&) {}
+        }
+
+        SDK::PacketDumper::get().arm(dir, packetId, byteCount, anyDir);
+
+        std::string dirStr = anyDir ? "ANY-DIRECTION" : ((dir == PacketDirection::Inbound) ? "INBOUND" : "OUTBOUND");
+        SDK::Chat::notify(std::format("Packet dumper §aARMED§7 for {} packet §e0x{:02x} ({})§7 ({} bytes).",
+            dirStr, packetId, packetName, byteCount));
+        SDK::Chat::notify("Waiting for next matching packet to dump to §fbutils_dumper.log§7...");
+    };
+    registerCommand("dump", "Capture and dump packet memory to butils_dumper.log", dumpCb);
 
     // Eject command
     CommandCallback ejectCb = [](const CommandArgs&)
