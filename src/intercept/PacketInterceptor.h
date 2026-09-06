@@ -26,7 +26,7 @@ public:
     // Returns true after hookSender() has completed successfully.
     [[nodiscard]] bool isOutboundHooked() const noexcept
     {
-        return m_outboundHooked;
+        return m_outboundHooked.load(std::memory_order_relaxed);
     }
 
     // Disable and remove all MinHook hooks, then drain in-flight trap executions.
@@ -92,8 +92,8 @@ private:
     std::array<HandleFn, kMaxId> m_byIdTrampolines{};
 
     // Outbound trampoline for sendToServer (vtable[2]) — set once by hookSender()
-    static inline SendFn s_origSendToServer = nullptr;
-    bool m_outboundHooked = false;
+    static inline std::atomic<SendFn> s_origSendToServer{nullptr};
+    std::atomic<bool> m_outboundHooked{false};
 
     // Stored dispatchers and session state for inbound injection.
     std::array<void*, kMaxId> m_dispatchers{};

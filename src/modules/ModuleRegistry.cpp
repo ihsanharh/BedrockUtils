@@ -59,13 +59,22 @@ void ModuleRegistry::init()
     SDK::Log::log("[ModuleRegistry] Initialized {} module(s)", m_modules.size());
 }
 
+static void safeModuleTick(Module* m) noexcept
+{
+    __try
+    {
+        m->onTick();
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
 void ModuleRegistry::tick()
 {
     for (const std::unique_ptr<Module>& m : m_modules)
     {
         if (m && m->isEnabled())
         {
-            m->onTick();
+            safeModuleTick(m.get());
         }
     }
 }

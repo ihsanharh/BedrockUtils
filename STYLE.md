@@ -237,3 +237,20 @@ style(CoreCommands): fix Allman brace style on empty catch blocks
 - **Never** use vague messages like `fix stuff`, `update`, or `wip`.
 - If a commit fixes a specific crash or regression, say what it was: `fix(chat): prevent ACCESS_VIOLATION when player not yet spawned`.
 - Breaking changes should be noted in the body: `BREAKING CHANGE: Module::onLoad() no longer receives PacketSender.`
+
+---
+
+## 11. Exception Handling & Memory Safety (SEH)
+
+- **Standard C++ Exception Model (`/EHsc`)**: The codebase strictly uses `/EHsc`. Do **not** reintroduce asynchronous exception models (`/EHa`).
+- **SEH in Leaf Functions Only**: `__try` / `__except` blocks must **never** be placed in functions that declare or contain local C++ objects requiring stack unwinding / destruction (MSVC error `C2712`).
+- **Centralized Safe Dereferencing**: Always use `SDK::Memory::read()` or `SDK::Memory::readValue()` from `sdk/SafeMem.h` for safe memory probing, pointer-chasing, and vtable inspection.
+- **`SafeString` Standard Capacity Bounds**: Any heap allocation for game `std::string` fields must round capacity to `(size | 0x0F)` and allocate `capacity + 1` bytes via `HeapAlloc`, matching MSVC STL standard allocator invariants.
+
+---
+
+## 12. Inbound Packet Injection & Thread Safety
+
+- **Live Network Thread Execution**: Injected inbound packets (such as test chat, command replies, or client-side entity spawns) must **only** be flushed on the live network thread inside `trapInbound()`.
+- **Zero Background-Thread Dispatch**: Never invoke `flushInbound()` or call Minecraft's `ClientNetworkHandler` / `PacketDispatcher::handle` directly from background worker threads (such as `AppCore::tick()`). Minecraft's client packet handling and chat UI subsystem are strictly non-thread-safe.
+

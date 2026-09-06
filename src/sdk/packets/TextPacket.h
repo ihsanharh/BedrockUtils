@@ -56,6 +56,7 @@ public:
         if (type == TextPacketType::CHAT || type == TextPacketType::TEXT_OBJECT)
         {
             message = newMsg;
+            variantIndex = 1;
         }
         else if (type == TextPacketType::RAW || type == TextPacketType::POPUP ||
                  type == TextPacketType::JUKEBOX_POPUP || type == TextPacketType::TIP ||

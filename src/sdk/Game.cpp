@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "Game.h"
 #include "Addresses.h"
+#include "SafeMem.h"
 #include "SafeString.h"
 #include "intercept/PacketInterceptor.h"
 #include <mutex>
@@ -11,71 +12,59 @@ namespace SDK
 
 Platform_GameCore* Platform_GameCore::get()
 {
-    __try
-    {
-        if (!Addresses::g_platformGameCore)
-        {
-            return nullptr;
-        }
-
-        void* winMain = *reinterpret_cast<void**>(Addresses::g_platformGameCore);
-        if (!winMain)
-        {
-            return nullptr;
-        }
-
-        void* platform = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(winMain) + 0x8);
-        if (!platform)
-        {
-            return nullptr;
-        }
-
-        return reinterpret_cast<Platform_GameCore*>(platform);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    if (!Addresses::g_platformGameCore)
     {
         return nullptr;
     }
+
+    void* winMain = nullptr;
+    if (!Memory::read(reinterpret_cast<const void*>(Addresses::g_platformGameCore), &winMain, sizeof(winMain)) || !winMain)
+    {
+        return nullptr;
+    }
+
+    void* platform = nullptr;
+    if (!Memory::read(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(winMain) + 0x8), &platform, sizeof(platform)) || !platform)
+    {
+        return nullptr;
+    }
+
+    return reinterpret_cast<Platform_GameCore*>(platform);
 }
 
 MinecraftGame* Platform_GameCore::getMinecraftGame()
 {
-    __try
-    {
-        void* mcgame = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(this) + 0x18);
-        if (!mcgame)
-        {
-            return nullptr;
-        }
-
-        return reinterpret_cast<MinecraftGame*>(mcgame);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    void* mcgame = nullptr;
+    if (!Memory::read(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(this) + 0x18), &mcgame, sizeof(mcgame)) || !mcgame)
     {
         return nullptr;
     }
+    return reinterpret_cast<MinecraftGame*>(mcgame);
 }
 
 ClientInstance* MinecraftGame::getPrimaryClientInstance()
 {
+    const uintptr_t mapAddr = reinterpret_cast<uintptr_t>(this) + 0x938;
+    size_t mapSize = 0;
+    if (!Memory::read(reinterpret_cast<const void*>(mapAddr + 8), &mapSize, sizeof(mapSize)))
+    {
+        return nullptr;
+    }
+    if (mapSize == 0 || mapSize > 16)
+    {
+        return nullptr;
+    }
+
+    using ClientMap = std::map<uint8_t, std::shared_ptr<ClientInstance>>;
+    const ClientMap* clients = reinterpret_cast<const ClientMap*>(mapAddr);
+
     __try
     {
-        const uintptr_t mapAddr = reinterpret_cast<uintptr_t>(this) + 0x938;
-        const size_t mapSize = *reinterpret_cast<const size_t*>(mapAddr + 8);
-        if (mapSize == 0 || mapSize > 16)
-        {
-            return nullptr;
-        }
-
-        using ClientMap = std::map<uint8_t, std::shared_ptr<ClientInstance>>;
-        ClientMap* clients = reinterpret_cast<ClientMap*>(mapAddr);
-
-        ClientMap::iterator it = clients->find(0);
+        ClientMap::const_iterator it = clients->find(0);
         if (it != clients->end() && it->second)
         {
             return it->second.get();
         }
-
         return nullptr;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -86,41 +75,41 @@ ClientInstance* MinecraftGame::getPrimaryClientInstance()
 
 ClientInstance* ClientInstance::get()
 {
-    __try
-    {
-        Platform_GameCore* platform = Platform_GameCore::get();
-        if (!platform)
-        {
-            return nullptr;
-        }
-
-        MinecraftGame* mcgame = platform->getMinecraftGame();
-        if (!mcgame)
-        {
-            return nullptr;
-        }
-
-        return mcgame->getPrimaryClientInstance();
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    Platform_GameCore* platform = Platform_GameCore::get();
+    if (!platform)
     {
         return nullptr;
     }
+
+    MinecraftGame* mcgame = platform->getMinecraftGame();
+    if (!mcgame)
+    {
+        return nullptr;
+    }
+
+    return mcgame->getPrimaryClientInstance();
 }
 
 LocalPlayer* ClientInstance::getLocalPlayer()
 {
+    void** vtable = nullptr;
+    if (!Memory::read(this, &vtable, sizeof(vtable)) || !vtable)
+    {
+        return nullptr;
+    }
+
+    void* fnPtr = nullptr;
+    if (!Memory::read(&vtable[0x1F], &fnPtr, sizeof(fnPtr)) || !fnPtr)
+    {
+        return nullptr;
+    }
+
+    using Fn = LocalPlayer*(__fastcall*)(ClientInstance*);
+    Fn fn = reinterpret_cast<Fn>(fnPtr);
+
     __try
     {
-        void** vtable = *reinterpret_cast<void***>(this);
-        if (!vtable)
-        {
-            return nullptr;
-        }
-
-        using Fn = LocalPlayer*(__fastcall*)(ClientInstance*);
-        Fn fn = reinterpret_cast<Fn>(vtable[0x1F]);
-        return fn ? fn(this) : nullptr;
+        return fn(this);
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
@@ -130,202 +119,219 @@ LocalPlayer* ClientInstance::getLocalPlayer()
 
 PacketSender* ClientInstance::packetSender()
 {
-    __try
+    // Standard offset 0x1C8 for PacketSender on ClientInstance
+    PacketSender* sender = nullptr;
+    if (!Memory::read(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(this) + 0x1C8), &sender, sizeof(sender)) || !sender)
     {
-        // Standard offset 0x1C8 for PacketSender on ClientInstance
-        PacketSender* sender = *reinterpret_cast<PacketSender* const*>(reinterpret_cast<uintptr_t>(this) + 0x1C8);
-        if (sender)
-        {
-            void** vtable = *reinterpret_cast<void***>(sender);
-            if (vtable)
-            {
-                return sender;
-            }
-        }
+        return nullptr;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {}
-    return nullptr;
+
+    void** vtable = nullptr;
+    if (!Memory::read(sender, &vtable, sizeof(vtable)) || !vtable)
+    {
+        return nullptr;
+    }
+
+    return sender;
 }
 
 MinecraftGame* ClientInstance::getMinecraftGame()
 {
-    __try
-    {
-        MinecraftGame* mg = *reinterpret_cast<MinecraftGame* const*>(reinterpret_cast<uintptr_t>(this) + 0x1A0);
-        return mg;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    MinecraftGame* mg = nullptr;
+    if (!Memory::read(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(this) + 0x1A0), &mg, sizeof(mg)))
     {
         return nullptr;
     }
+    return mg;
 }
 
 PacketSender* LocalPlayer::packetSender() const
 {
-    __try
-    {
-        PacketSender* sender = *reinterpret_cast<PacketSender* const*>(reinterpret_cast<uintptr_t>(this) + 0x7F8);
-        return sender;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    PacketSender* sender = nullptr;
+    if (!Memory::read(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(this) + 0x7F8), &sender, sizeof(sender)))
     {
         return nullptr;
     }
+    return sender;
 }
 
 float* LocalPlayer::getPos() const
 {
-    __try
-    {
-        StateVectorComponent** stateVector = reinterpret_cast<StateVectorComponent**>(reinterpret_cast<uintptr_t>(this) + 0x218);
-        if (stateVector && *stateVector)
-        {
-            return (*stateVector)->pos;
-        }
-        return nullptr;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    StateVectorComponent* stateVector = nullptr;
+    if (!Memory::read(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(this) + 0x218), &stateVector, sizeof(stateVector)) || !stateVector)
     {
         return nullptr;
     }
+
+    if (!Memory::isValidReadPtr(stateVector, sizeof(StateVectorComponent)))
+    {
+        return nullptr;
+    }
+
+    return stateVector->pos;
 }
 
 std::string LocalPlayer::getName() const
 {
-    __try
+    std::string name;
+    if (safeReadString(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(this) + 0xBC0), name))
     {
-        std::string name;
-        if (safeReadString(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(this) + 0xBC0), name))
-        {
-            return name;
-        }
+        return name;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {}
     return "";
 }
 
 std::string LocalPlayer::getXuid() const
 {
-    __try
+    ClientInstance* ci = ClientInstance::get();
+    if (ci)
     {
-        ClientInstance* ci = ClientInstance::get();
-        if (ci)
+        MinecraftGame* mg = ci->getMinecraftGame();
+        if (mg)
         {
-            MinecraftGame* mg = ci->getMinecraftGame();
-            if (mg)
+            std::string xuid;
+            if (safeReadString(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mg) + 0x250), xuid))
             {
-                std::string xuid;
-                if (safeReadString(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mg) + 0x250), xuid))
-                {
-                    return xuid;
-                }
+                return xuid;
             }
         }
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {}
     return "";
+}
+
+static void* safeCallGetGameInfo(void* (*fn)(void*), void* connector) noexcept
+{
+    if (!fn || !connector)
+    {
+        return nullptr;
+    }
+
+    __try
+    {
+        return fn(connector);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
 }
 
 static bool readEngineConnectionInfo(ServerConnectionDetails& out)
 {
-    __try
-    {
-        ClientInstance* ci = ClientInstance::get();
-        if (!ci)
-        {
-            return false;
-        }
-
-        PacketSender* ps = ci->packetSender();
-        if (!ps && ci->getLocalPlayer())
-        {
-            ps = ci->getLocalPlayer()->packetSender();
-        }
-        if (!ps)
-        {
-            return false;
-        }
-
-        // PacketSender->networkSystem is at offset 0x20
-        uint8_t* psBytes = reinterpret_cast<uint8_t*>(ps);
-        void* netSys = *reinterpret_cast<void**>(psBytes + 0x20);
-        if (!netSys)
-        {
-            return false;
-        }
-
-        // NetworkSystem->remoteConnector is at offset 0xF8
-        uint8_t* netSysBytes = reinterpret_cast<uint8_t*>(netSys);
-        void* composite = *reinterpret_cast<void**>(netSysBytes + 0xF8);
-        if (!composite)
-        {
-            return false;
-        }
-
-        uint8_t* compBytes = reinterpret_cast<uint8_t*>(composite);
-        uint8_t* ownerControlBlock = *reinterpret_cast<uint8_t**>(compBytes + 0x50);
-        void* networkSessionOwner = *reinterpret_cast<void**>(compBytes + 0x60);
-        if (!ownerControlBlock || !*ownerControlBlock || !networkSessionOwner)
-        {
-            return false;
-        }
-
-        uint8_t* sessOwnerBytes = reinterpret_cast<uint8_t*>(networkSessionOwner);
-        void* sessionInfo = *reinterpret_cast<void**>(sessOwnerBytes + 0x18);
-        bool usesNetherNet = sessionInfo && *reinterpret_cast<int*>(reinterpret_cast<uint8_t*>(sessionInfo) + 0x18) == 2;
-
-        void* activeConnector = usesNetherNet ? *reinterpret_cast<void**>(compBytes + 0x68)
-                                             : *reinterpret_cast<void**>(compBytes + 0x70);
-        if (!activeConnector)
-        {
-            return false;
-        }
-
-        void** vtable = *reinterpret_cast<void***>(activeConnector);
-        if (!vtable || !vtable[3])
-        {
-            return false;
-        }
-
-        using GetGameInfoFn = void* (*)(void*);
-        GetGameInfoFn fn = reinterpret_cast<GetGameInfoFn>(vtable[3]);
-        void* gameInfo = fn(activeConnector);
-        if (!gameInfo)
-        {
-            return false;
-        }
-
-        uint8_t* infoBytes = reinterpret_cast<uint8_t*>(gameInfo);
-
-        std::string hostIp, unresolvedUrl, creatorName;
-        safeReadString(infoBytes + 0x08, hostIp);
-        safeReadString(infoBytes + 0x28, unresolvedUrl);
-        safeReadString(infoBytes + 0x130, creatorName);
-        int port = *reinterpret_cast<int*>(infoBytes + 0x8C);
-
-        if (!hostIp.empty())
-        {
-            out.hostIp = std::move(hostIp);
-        }
-        if (!unresolvedUrl.empty())
-        {
-            out.unresolvedUrl = std::move(unresolvedUrl);
-        }
-        if (!creatorName.empty())
-        {
-            out.creatorName = std::move(creatorName);
-        }
-        if (port > 0)
-        {
-            out.port = port;
-        }
-
-        return !out.hostIp.empty() || !out.unresolvedUrl.empty() || !out.creatorName.empty();
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    ClientInstance* ci = ClientInstance::get();
+    if (!ci)
     {
         return false;
     }
+
+    PacketSender* ps = ci->packetSender();
+    if (!ps && ci->getLocalPlayer())
+    {
+        ps = ci->getLocalPlayer()->packetSender();
+    }
+    if (!ps)
+    {
+        return false;
+    }
+
+    // PacketSender->networkSystem is at offset 0x20
+    void* netSys = nullptr;
+    if (!Memory::read(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(ps) + 0x20), &netSys, sizeof(netSys)) || !netSys)
+    {
+        return false;
+    }
+
+    // NetworkSystem->remoteConnector is at offset 0xF8
+    void* composite = nullptr;
+    if (!Memory::read(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(netSys) + 0xF8), &composite, sizeof(composite)) || !composite)
+    {
+        return false;
+    }
+
+    uint8_t* compBytes = reinterpret_cast<uint8_t*>(composite);
+    uint8_t* ownerControlBlock = nullptr;
+    void* networkSessionOwner = nullptr;
+    if (!Memory::read(compBytes + 0x50, &ownerControlBlock, sizeof(ownerControlBlock)) || !ownerControlBlock)
+    {
+        return false;
+    }
+
+    uint8_t ctrlVal = 0;
+    if (!Memory::read(ownerControlBlock, &ctrlVal, sizeof(ctrlVal)) || ctrlVal == 0)
+    {
+        return false;
+    }
+
+    if (!Memory::read(compBytes + 0x60, &networkSessionOwner, sizeof(networkSessionOwner)) || !networkSessionOwner)
+    {
+        return false;
+    }
+
+    void* sessionInfo = nullptr;
+    Memory::read(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(networkSessionOwner) + 0x18), &sessionInfo, sizeof(sessionInfo));
+
+    int netherNetVal = 0;
+    if (sessionInfo)
+    {
+        Memory::read(reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(sessionInfo) + 0x18), &netherNetVal, sizeof(netherNetVal));
+    }
+    bool usesNetherNet = (sessionInfo != nullptr && netherNetVal == 2);
+
+    void* activeConnector = nullptr;
+    size_t connectorOffset = usesNetherNet ? 0x68 : 0x70;
+    if (!Memory::read(compBytes + connectorOffset, &activeConnector, sizeof(activeConnector)) || !activeConnector)
+    {
+        return false;
+    }
+
+    void** vtable = nullptr;
+    if (!Memory::read(activeConnector, &vtable, sizeof(vtable)) || !vtable)
+    {
+        return false;
+    }
+
+    void* getGameInfoFnPtr = nullptr;
+    if (!Memory::read(&vtable[3], &getGameInfoFnPtr, sizeof(getGameInfoFnPtr)) || !getGameInfoFnPtr)
+    {
+        return false;
+    }
+
+    using GetGameInfoFn = void* (*)(void*);
+    GetGameInfoFn fn = reinterpret_cast<GetGameInfoFn>(getGameInfoFnPtr);
+    void* gameInfo = safeCallGetGameInfo(fn, activeConnector);
+    if (!gameInfo)
+    {
+        return false;
+    }
+
+    uint8_t* infoBytes = reinterpret_cast<uint8_t*>(gameInfo);
+
+    std::string hostIp, unresolvedUrl, creatorName;
+    safeReadString(infoBytes + 0x08, hostIp);
+    safeReadString(infoBytes + 0x28, unresolvedUrl);
+    safeReadString(infoBytes + 0x130, creatorName);
+
+    int port = 0;
+    Memory::read(infoBytes + 0x8C, &port, sizeof(port));
+
+    if (!hostIp.empty())
+    {
+        out.hostIp = std::move(hostIp);
+    }
+    if (!unresolvedUrl.empty())
+    {
+        out.unresolvedUrl = std::move(unresolvedUrl);
+    }
+    if (!creatorName.empty())
+    {
+        out.creatorName = std::move(creatorName);
+    }
+    if (port > 0)
+    {
+        out.port = port;
+    }
+
+    return !out.hostIp.empty() || !out.unresolvedUrl.empty() || !out.creatorName.empty();
 }
 
 namespace Game

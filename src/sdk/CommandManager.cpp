@@ -199,6 +199,9 @@ bool CommandManager::dispatchInternal(CommandRequest& req)
     cr->version = 50;
     cr->internal = false;
 
+    bool isSilent = req.silent;
+    size_t expectedLines = req.expectedLines;
+
     ActiveRequest ar;
     ar.req = std::move(req);
     ar.packetHolder = pkt;
@@ -210,7 +213,7 @@ bool CommandManager::dispatchInternal(CommandRequest& req)
     m_activeRequests.push_back(std::move(ar));
 
     SDK::Log::log("[CommandManager] Dispatched command: {} (silent={}, expectedLines={})",
-        formattedCmd, ar.req.silent, ar.req.expectedLines);
+        formattedCmd, isSilent, expectedLines);
     sender->sendToServer(pkt.get());
     return true;
 }
@@ -238,6 +241,41 @@ void CommandManager::handleInboundText(TypedPacketContext<TextPacket>& ctx)
         return;
     }
 
+    // Split raw lines containing embedded newlines so each line is processed and batched individually
+    std::vector<std::string> splitLines;
+    for (const std::string& raw : rawLines)
+    {
+        size_t start = 0;
+        while (start < raw.size())
+        {
+            size_t end = raw.find('\n', start);
+            std::string line = (end == std::string::npos)
+                ? raw.substr(start)
+                : raw.substr(start, end - start);
+
+            if (!line.empty() && line.back() == '\r')
+            {
+                line.pop_back();
+            }
+
+            if (!line.empty())
+            {
+                splitLines.push_back(std::move(line));
+            }
+
+            if (end == std::string::npos)
+            {
+                break;
+            }
+            start = end + 1;
+        }
+    }
+
+    if (splitLines.empty())
+    {
+        return;
+    }
+
     uint8_t pktType = static_cast<uint8_t>(ctx.packet->type);
     std::vector<std::pair<std::function<void(const CommandResult&)>, CommandResult>> toFire;
 
@@ -245,7 +283,7 @@ void CommandManager::handleInboundText(TypedPacketContext<TextPacket>& ctx)
         std::lock_guard<std::recursive_mutex> lk(m_mutex);
         std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
 
-        for (const std::string& rawLineStr : rawLines)
+        for (const std::string& rawLineStr : splitLines)
         {
             std::string cleanLine = stripColorCodes(rawLineStr);
             std::string cleanLower = toLower(cleanLine);
@@ -640,6 +678,7 @@ void CommandManager::shutdown()
     m_pendingQueue.clear();
     m_activeRequests.clear();
     m_lastDispatchTime = {};
+    m_initialized = false;
 }
 
 } // namespace SDK

@@ -154,6 +154,7 @@ public:
     // World state mutation
     void updatePlayerPosition(int64_t runtimeId, const float pos[3]);
     void updatePlayerTransform(int64_t runtimeId, const float pos[3], float pitch, float yaw, float headYaw, bool onGround = true);
+    void updatePlayerDeltaTransform(int64_t runtimeId, const float deltaPos[3], float pitch, float yaw, float headYaw, bool onGround = true);
 
     // Queries
     std::shared_ptr<TrackedPlayer> getPlayer(int64_t runtimeId) const;

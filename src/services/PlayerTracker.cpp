@@ -235,6 +235,42 @@ void PlayerTracker::updatePlayerTransform(int64_t runtimeId, const float pos[3],
     }
 }
 
+void PlayerTracker::updatePlayerDeltaTransform(int64_t runtimeId, const float deltaPos[3], float pitch, float yaw, float headYaw, bool onGround)
+{
+    std::shared_ptr<TrackedPlayer> player;
+    std::vector<PlayerCallback> moveCbs;
+    {
+        std::lock_guard<std::recursive_mutex> lk(m_mutex);
+        if (m_runtimeIdToPlayer.empty())
+        {
+            return;
+        }
+        std::unordered_map<int64_t, std::shared_ptr<TrackedPlayer>>::const_iterator it = m_runtimeIdToPlayer.find(runtimeId);
+        if (it == m_runtimeIdToPlayer.end() || !it->second)
+        {
+            return;
+        }
+
+        float newPos[3] = {
+            it->second->pos[0] + (deltaPos ? deltaPos[0] : 0.0f),
+            it->second->pos[1] + (deltaPos ? deltaPos[1] : 0.0f),
+            it->second->pos[2] + (deltaPos ? deltaPos[2] : 0.0f)
+        };
+
+        it->second->updateTransform(newPos, pitch, yaw, headYaw, onGround);
+        player = it->second;
+        moveCbs = m_moveCallbacks;
+    }
+
+    for (const PlayerCallback& cb : moveCbs)
+    {
+        if (cb)
+        {
+            cb(player);
+        }
+    }
+}
+
 void PlayerTracker::removePlayer(int64_t runtimeId)
 {
     std::lock_guard<std::recursive_mutex> lk(m_mutex);
@@ -324,6 +360,7 @@ std::shared_ptr<TrackedPlayer> PlayerTracker::findPlayerByName(std::string_view 
         return getPlayerByUuid(itTag->second);
     }
 
+    // Pass 1: Exact matches
     for (const std::pair<const std::string, std::shared_ptr<TrackedPlayer>>& pair : m_players)
     {
         if (!pair.second)
@@ -332,11 +369,37 @@ std::shared_ptr<TrackedPlayer> PlayerTracker::findPlayerByName(std::string_view 
         }
         std::string pName = SDK::toLower(pair.second->name);
         std::string pTag = SDK::toLower(SDK::stripColorCodes(pair.second->nametag));
+        if (pName == lower || pTag == lower)
+        {
+            return pair.second;
+        }
+    }
 
-        if (pName == lower || pTag == lower ||
-            pName.find(lower) != std::string::npos ||
-            pTag.find(lower) != std::string::npos ||
-            SDK::toLower(pair.second->uuid).starts_with(lower))
+    // Pass 2: Prefix matches
+    for (const std::pair<const std::string, std::shared_ptr<TrackedPlayer>>& pair : m_players)
+    {
+        if (!pair.second)
+        {
+            continue;
+        }
+        std::string pName = SDK::toLower(pair.second->name);
+        std::string pTag = SDK::toLower(SDK::stripColorCodes(pair.second->nametag));
+        if (pName.starts_with(lower) || pTag.starts_with(lower) || SDK::toLower(pair.second->uuid).starts_with(lower))
+        {
+            return pair.second;
+        }
+    }
+
+    // Pass 3: Substring matches
+    for (const std::pair<const std::string, std::shared_ptr<TrackedPlayer>>& pair : m_players)
+    {
+        if (!pair.second)
+        {
+            continue;
+        }
+        std::string pName = SDK::toLower(pair.second->name);
+        std::string pTag = SDK::toLower(SDK::stripColorCodes(pair.second->nametag));
+        if (pName.find(lower) != std::string::npos || pTag.find(lower) != std::string::npos)
         {
             return pair.second;
         }
@@ -670,7 +733,7 @@ void PlayerTracker::init()
         float pitch = byteToDegrees(ctx.packet->pitch);
         float yaw = byteToDegrees(ctx.packet->yaw);
         float headYaw = byteToDegrees(ctx.packet->headYaw);
-        updatePlayerTransform(ctx.packet->runtimeEntityId, ctx.packet->pos, pitch, yaw, headYaw, true);
+        updatePlayerDeltaTransform(ctx.packet->runtimeEntityId, ctx.packet->pos, pitch, yaw, headYaw, true);
     }, &m_trackMovement);
 
     // Actor despawn (RemoveActorPacket 0x0E): Preserves last known coordinates, unbinds runtimeEntityId

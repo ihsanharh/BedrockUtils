@@ -1,5 +1,6 @@
 #include "Pipeline.h"
 #include "pch.h"
+#include "sdk/Logger.h"
 #include "services/PacketDumper.h"
 #include <algorithm>
 
@@ -12,6 +13,8 @@ static bool invokeHandlerSafe(const PacketHandler& fn, PacketContext& ctx)
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
+        SDK::Log::log("[Pipeline] SEH Exception 0x{:08X} in handler for packet ID 0x{:02x} ({})",
+            GetExceptionCode(), static_cast<uint8_t>(ctx.id()), SDK::getPacketName(ctx.id()));
         return false;
     }
 }

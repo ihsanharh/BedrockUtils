@@ -116,32 +116,59 @@ inline HttpResponse execCurl(
     }
     CloseHandle(hStdInWrite);
 
+    std::wstring cleanUrl;
+    cleanUrl.reserve(url.size());
+    for (char c : url)
+    {
+        if (c != '"' && c != '%' && c != '\r' && c != '\n')
+        {
+            cleanUrl.push_back(static_cast<wchar_t>(c));
+        }
+    }
+
+    std::wstring wMethod(method.begin(), method.end());
+
     std::wstring headerArgs;
     if (!contentType.empty())
     {
-        headerArgs += std::format(L" -H \"Content-Type: {}\"", std::wstring(contentType.begin(), contentType.end()));
+        std::wstring cleanCt;
+        cleanCt.reserve(contentType.size());
+        for (char c : contentType)
+        {
+            if (c != '"' && c != '\r' && c != '\n')
+            {
+                cleanCt.push_back(static_cast<wchar_t>(c));
+            }
+        }
+        headerArgs += std::format(L" -H \"Content-Type: {}\"", cleanCt);
     }
     for (const std::string& h : headers)
     {
-        headerArgs += std::format(L" -H \"{}\"", std::wstring(h.begin(), h.end()));
+        std::wstring cleanH;
+        cleanH.reserve(h.size());
+        for (char c : h)
+        {
+            if (c != '"' && c != '\r' && c != '\n')
+            {
+                cleanH.push_back(static_cast<wchar_t>(c));
+            }
+        }
+        headerArgs += std::format(L" -H \"{}\"", cleanH);
     }
-
-    std::wstring wUrl(url.begin(), url.end());
-    std::wstring wMethod(method.begin(), method.end());
 
     std::wstring cmd;
     if (!body.empty())
     {
         cmd = std::format(
             L"curl.exe -k -s -m {} -X {} \"{}\"{} --data-binary @- -w \"\\n%{{http_code}}\"",
-            timeoutSec, wMethod, wUrl, headerArgs
+            timeoutSec, wMethod, cleanUrl, headerArgs
         );
     }
     else
     {
         cmd = std::format(
             L"curl.exe -k -s -m {} -X {} \"{}\"{} -w \"\\n%{{http_code}}\"",
-            timeoutSec, wMethod, wUrl, headerArgs
+            timeoutSec, wMethod, cleanUrl, headerArgs
         );
     }
 

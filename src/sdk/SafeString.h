@@ -1,4 +1,5 @@
 #pragma once
+#include "SafeMem.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -171,7 +172,7 @@ struct SafeString
         else
         {
             size_t newCap = (sv.size() | 0x0F);
-            char* heapBuf = static_cast<char*>(std::malloc(newCap + 1));
+            char* heapBuf = static_cast<char*>(HeapAlloc(GetProcessHeap(), 0, newCap + 1));
             if (heapBuf)
             {
                 std::memcpy(heapBuf, sv.data(), sv.size());
@@ -300,40 +301,43 @@ static_assert(sizeof(SafeString) == 32, "SafeString size mismatch with MSVC std:
 
 inline bool safeReadString(const void* strAddr, std::string& out)
 {
-    __try
+    if (!strAddr)
     {
-        if (!strAddr)
-        {
-            return false;
-        }
-
-        const SafeString* s = reinterpret_cast<const SafeString*>(strAddr);
-        if (s->res < 16)
-        {
-            if (s->size == 0)
-            {
-                out.clear();
-                return true;
-            }
-            if (s->size <= 15)
-            {
-                out.assign(s->buf, s->size);
-                return true;
-            }
-            return false;
-        }
-        else
-        {
-            if (s->size > 0 && s->size <= 131072 && s->ptr)
-            {
-                out.assign(s->ptr, s->size);
-                return true;
-            }
-            return false;
-        }
+        return false;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+
+    SafeString s;
+    if (!Memory::read(strAddr, &s, sizeof(SafeString)))
     {
+        return false;
+    }
+
+    if (s.res < 16)
+    {
+        if (s.size == 0)
+        {
+            out.clear();
+            return true;
+        }
+        if (s.size <= 15)
+        {
+            out.assign(s.buf, s.size);
+            return true;
+        }
+        return false;
+    }
+    else
+    {
+        if (s.size > 0 && s.size <= 131072 && s.ptr)
+        {
+            out.resize(s.size);
+            if (Memory::read(s.ptr, out.data(), s.size))
+            {
+                return true;
+            }
+            out.clear();
+            return false;
+        }
         return false;
     }
 }
@@ -347,27 +351,20 @@ inline std::string SafeString::str() const
 
 inline std::string_view SafeString::view() const
 {
-    __try
+    if (res < 16)
     {
-        if (res < 16)
+        if (size <= 15)
         {
-            if (size <= 15)
-            {
-                return std::string_view(buf, size);
-            }
-            return {};
+            return std::string_view(buf, size);
         }
-        else
-        {
-            if (size > 0 && size <= 131072 && ptr)
-            {
-                return std::string_view(ptr, size);
-            }
-            return {};
-        }
+        return {};
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    else
     {
+        if (size > 0 && size <= 131072 && ptr && Memory::isValidReadPtr(ptr, 1))
+        {
+            return std::string_view(ptr, size);
+        }
         return {};
     }
 }
@@ -379,31 +376,32 @@ inline std::ostream& operator<<(std::ostream& os, const SafeString& s)
 
 inline bool safeReadVectorString(const void* vecAddr, size_t index, std::string& out)
 {
-    __try
-    {
-        if (!vecAddr)
-        {
-            return false;
-        }
-        const uintptr_t* vec = reinterpret_cast<const uintptr_t*>(vecAddr);
-        uintptr_t first = vec[0];
-        uintptr_t last  = vec[1];
-        if (!first || !last || last <= first)
-        {
-            return false;
-        }
-        size_t count = (last - first) / 32; // sizeof(std::string) in MSVC x64 is 32 bytes
-        if (index >= count || count > 100)
-        {
-            return false;
-        }
-        const void* strAddr = reinterpret_cast<const void*>(first + index * 32);
-        return safeReadString(strAddr, out);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    if (!vecAddr)
     {
         return false;
     }
+
+    uintptr_t vec[3] = {};
+    if (!Memory::read(vecAddr, vec, sizeof(vec)))
+    {
+        return false;
+    }
+
+    uintptr_t first = vec[0];
+    uintptr_t last  = vec[1];
+    if (!first || !last || last <= first)
+    {
+        return false;
+    }
+
+    size_t count = (last - first) / 32; // sizeof(std::string) in MSVC x64 is 32 bytes
+    if (index >= count || count > 100)
+    {
+        return false;
+    }
+
+    const void* strAddr = reinterpret_cast<const void*>(first + index * 32);
+    return safeReadString(strAddr, out);
 }
 
 // Safely reads all text messages in a TextPacket (message, sourceName, parameters[0..9], and scanned offsets)

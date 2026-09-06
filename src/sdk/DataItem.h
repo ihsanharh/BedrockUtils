@@ -386,11 +386,7 @@ public:
         if (item && item->type == 4)
         {
             const StringDataItem* strItem = static_cast<const StringDataItem*>(item);
-            __try
-            {
-                return strItem->value.view();
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER) {}
+            return strItem->value.view();
         }
         return defaultVal;
     }

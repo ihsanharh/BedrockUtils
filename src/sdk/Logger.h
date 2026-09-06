@@ -84,7 +84,14 @@ public:
         if (tryOpenLogStream(m_logFile, "butils.log", resolved))
         {
             m_initialized = true;
+            m_logFilePath = resolved;
+            m_logFile.flush();
         }
+    }
+
+    [[nodiscard]] const std::string& getLogFilePath() const noexcept
+    {
+        return m_logFilePath;
     }
 
     template<typename... Args>
@@ -100,11 +107,13 @@ public:
 
         // 1. Write to standard output
         std::cout << msg << "\n";
+        std::cout.flush();
 
-        // 2. Write to log file
+        // 2. Write to log file and immediately flush to OS file cache so it can be read in real time
         if (m_logFile.is_open())
         {
             m_logFile << msg << "\n";
+            m_logFile.flush();
         }
 
         // 3. Write to OutputDebugString for debugger / DebugView
@@ -131,6 +140,7 @@ public:
             m_logFile.close();
         }
         m_initialized = false;
+        m_logFilePath.clear();
     }
 
 private:
@@ -142,6 +152,7 @@ private:
 
     std::mutex    m_mutex;
     std::ofstream m_logFile;
+    std::string   m_logFilePath;
     bool          m_initialized = false;
 };
 

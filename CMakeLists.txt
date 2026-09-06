@@ -32,17 +32,9 @@ target_compile_definitions(BedrockUtils PRIVATE
 
 if(MSVC)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        # clang-cl handles __try in C++ functions natively — no /EHa needed.
-        # Passing /EHa to clang-cl causes an internal compiler crash (exit 139).
         target_compile_options(BedrockUtils PRIVATE /W4 /permissive- -Qunused-arguments -Wno-invalid-offsetof)
     else()
-        # MSVC cl.exe C2712: Cannot use __try in functions that require object unwinding.
-        # Replace /EHsc (C++ EH only) with /EHa (async SEH + C++ EH) so that __try can
-        # be used in functions that also have C++ objects with destructors.
-        string(REPLACE "/EHsc" "/EHa" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-        string(REPLACE "/EHsc" "/EHa" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
-        string(REPLACE "/EHsc" "/EHa" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
-        target_compile_options(BedrockUtils PRIVATE /EHa /W4 /MP /permissive-)
+        target_compile_options(BedrockUtils PRIVATE /EHsc /W4 /MP /permissive-)
     endif()
     target_link_options(BedrockUtils PRIVATE /SUBSYSTEM:WINDOWS)
 endif()

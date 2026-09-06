@@ -5,6 +5,7 @@
 #include "sdk/CrashHandler.h"
 #include "sdk/Factory.h"
 #include "sdk/Logger.h"
+#include "sdk/SafeMem.h"
 #include "sdk/packets/AddActorPacket.h"
 #include "sdk/packets/AddPlayerPacket.h"
 #include <MinHook.h>
@@ -25,22 +26,23 @@ static std::string formatNetId(void* netId)
         return "";
     }
 
-    __try
+    uint8_t p[8]{};
+    if (!SDK::Memory::read(netId, p, sizeof(p)))
     {
-        const uint8_t* p = reinterpret_cast<const uint8_t*>(netId);
-        uint16_t family = *reinterpret_cast<const uint16_t*>(p);
-        if (family == 2) // AF_INET
-        {
-            uint16_t port = (static_cast<uint16_t>(p[2]) << 8) | static_cast<uint16_t>(p[3]);
-            return std::format("{}.{}.{}.{}:{}", p[4], p[5], p[6], p[7], port);
-        }
-        else if (family == 23) // AF_INET6
-        {
-            uint16_t port = (static_cast<uint16_t>(p[2]) << 8) | static_cast<uint16_t>(p[3]);
-            return std::format("[IPv6]:{}", port);
-        }
+        return "";
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {}
+
+    uint16_t family = *reinterpret_cast<const uint16_t*>(p);
+    if (family == 2) // AF_INET
+    {
+        uint16_t port = (static_cast<uint16_t>(p[2]) << 8) | static_cast<uint16_t>(p[3]);
+        return std::format("{}.{}.{}.{}:{}", p[4], p[5], p[6], p[7], port);
+    }
+    else if (family == 23) // AF_INET6
+    {
+        uint16_t port = (static_cast<uint16_t>(p[2]) << 8) | static_cast<uint16_t>(p[3]);
+        return std::format("[IPv6]:{}", port);
+    }
 
     return "";
 }
@@ -62,6 +64,23 @@ struct TrapGuard
     }
 };
 
+static void callTrampolineSafe(PacketInterceptor::HandleFn trampoline, void* self, void* netId, void* cb, std::shared_ptr<SDK::Packet>& pkt) noexcept
+{
+    if (!trampoline)
+    {
+        return;
+    }
+
+    __try
+    {
+        trampoline(self, netId, cb, pkt);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        SDK::Log::log("[PacketInterceptor] Exception in dispatcher trampoline!");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Inbound trap
 // ---------------------------------------------------------------------------
@@ -74,15 +93,11 @@ void PacketInterceptor::trapInbound(void* self, void* netId, void* cb, std::shar
     SDK::PacketID pktId = SDK::PacketID::NONE;
     if (pkt)
     {
-        __try
+        pktId = safeGetPacketId(pkt.get());
+        if (pktId != SDK::PacketID::NONE)
         {
-            pktId = pkt->getID();
             SDK::Crash::g_lastInboundPacketId.store(static_cast<uint32_t>(pktId));
             SDK::Crash::g_lastCheckpoint.store("trapInbound: got packet ID");
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            SDK::Log::log("[Inbound] Exception reading pkt->getID()!");
         }
     }
 
@@ -91,166 +106,159 @@ void PacketInterceptor::trapInbound(void* self, void* netId, void* cb, std::shar
 
     // Fast O(1) trampoline lookup without mutex contention on hot packet path
     HandleFn trampoline = (idx < kMaxId) ? inter.m_byIdTrampolines[idx] : nullptr;
-    if (!trampoline)
+    if (!trampoline && self)
     {
-        void** vtable   = *reinterpret_cast<void***>(self);
-        void*  origAddr = vtable ? vtable[1] : nullptr;
-        if (origAddr)
+        void** vtable = nullptr;
+        if (SDK::Memory::read(self, &vtable, sizeof(vtable)) && vtable)
         {
-            std::shared_lock lock(inter.m_inboundMutex);
-            std::unordered_map<void*, HandleFn>::const_iterator it = inter.m_inboundTrampolines.find(origAddr);
-            if (it != inter.m_inboundTrampolines.end())
+            void* origAddr = nullptr;
+            if (SDK::Memory::read(&vtable[1], &origAddr, sizeof(origAddr)) && origAddr)
             {
-                trampoline = it->second;
+                std::shared_lock lock(inter.m_inboundMutex);
+                std::unordered_map<void*, HandleFn>::const_iterator it = inter.m_inboundTrampolines.find(origAddr);
+                if (it != inter.m_inboundTrampolines.end())
+                {
+                    trampoline = it->second;
+                }
             }
         }
     }
 
     if (inter.m_uninstalled.load(std::memory_order_acquire))
     {
-        if (trampoline)
-        {
-            trampoline(self, netId, cb, pkt);
-        }
+        callTrampolineSafe(trampoline, self, netId, cb, pkt);
         return;
     }
 
     if (!pkt)
     {
-        if (trampoline)
-        {
-            trampoline(self, netId, cb, pkt);
-        }
+        callTrampolineSafe(trampoline, self, netId, cb, pkt);
         return;
     }
 
-    bool shouldDrop = false;
-    PacketContext ctx{PacketDirection::Inbound, pkt.get()};
+    inter.m_lastCb.store(cb, std::memory_order_relaxed);
 
-    __try
+    // S2C packets that are ONLY ever received by ClientNetworkHandler
+    const bool isS2CClientOnly = (
+        pktId == SDK::PacketID::ADD_ACTOR ||
+        pktId == SDK::PacketID::ADD_PLAYER ||
+        pktId == SDK::PacketID::REMOVE_ACTOR ||
+        pktId == SDK::PacketID::MOVE_ACTOR_DELTA ||
+        pktId == SDK::PacketID::MOVE_ACTOR_ABSOLUTE ||
+        pktId == SDK::PacketID::PLAYER_LIST ||
+        pktId == SDK::PacketID::PLAY_STATUS ||
+        pktId == SDK::PacketID::CHANGE_DIMENSION ||
+        pktId == SDK::PacketID::AVAILABLE_COMMANDS
+    );
+
+    if (cb && isS2CClientOnly)
     {
-        inter.m_lastCb.store(cb, std::memory_order_relaxed);
-
-        // S2C packets that are ONLY ever received by ClientNetworkHandler
-        const bool isS2CClientOnly = (
-            pktId == SDK::PacketID::ADD_ACTOR ||
-            pktId == SDK::PacketID::ADD_PLAYER ||
-            pktId == SDK::PacketID::REMOVE_ACTOR ||
-            pktId == SDK::PacketID::MOVE_ACTOR_DELTA ||
-            pktId == SDK::PacketID::MOVE_ACTOR_ABSOLUTE ||
-            pktId == SDK::PacketID::PLAYER_LIST ||
-            pktId == SDK::PacketID::PLAY_STATUS ||
-            pktId == SDK::PacketID::CHANGE_DIMENSION ||
-            pktId == SDK::PacketID::AVAILABLE_COMMANDS
-        );
-
-        if (cb && isS2CClientOnly)
+        void* vt = nullptr;
+        if (SDK::Memory::read(cb, &vt, sizeof(vt)) && vt)
         {
-            void* vt = *reinterpret_cast<void**>(cb);
             inter.m_clientVtable.store(vt, std::memory_order_release);
             inter.m_clientCb.store(cb, std::memory_order_release);
         }
+    }
 
-        if (cb && pktId == SDK::PacketID::TEXT)
+    if (cb && pktId == SDK::PacketID::TEXT)
+    {
+        void* vt = nullptr;
+        if (SDK::Memory::read(cb, &vt, sizeof(vt)) && vt)
         {
-            void* vt = *reinterpret_cast<void**>(cb);
             void* clientVt = inter.m_clientVtable.load(std::memory_order_acquire);
             if (!clientVt || vt == clientVt)
             {
                 inter.m_clientCb.store(cb, std::memory_order_release);
             }
         }
-
-        if (idx < kMaxId && self)
-        {
-            inter.m_dispatchers[idx] = self;
-        }
-
-        // Network connection state tracking and logging (cached by pointer to avoid overhead on every packet)
-        if (netId && netId != inter.m_lastCheckedNetId.load(std::memory_order_relaxed))
-        {
-            inter.m_lastCheckedNetId.store(netId, std::memory_order_relaxed);
-            __try
-            {
-                std::memcpy(inter.m_savedNetIdBuffer, netId, 160);
-                inter.m_lastNetId.store(inter.m_savedNetIdBuffer, std::memory_order_release);
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER)
-            {
-                inter.m_lastNetId.store(netId, std::memory_order_relaxed);
-            }
-
-            std::string curAddr = formatNetId(netId);
-            if (!curAddr.empty() && curAddr != inter.getConnectedServer())
-            {
-                {
-                    std::unique_lock lock(inter.m_netInfoMutex);
-                    inter.m_connectedServer = curAddr;
-                    inter.m_transferHost.clear();
-                }
-                SDK::Log::log("[Network] Connected to server: {}", curAddr);
-            }
-        }
-
-        if (pktId == SDK::PacketID::DISCONNECT)
-        {
-            std::string oldAddr = inter.getConnectedServer();
-            SDK::Log::log("[Network] Disconnected from server: {}", oldAddr.empty() ? "Server" : oldAddr);
-            inter.resetSession();
-        }
-        else if (pktId == SDK::PacketID::TRANSFER)
-        {
-            std::string host;
-            const uint8_t* base = reinterpret_cast<const uint8_t*>(pkt.get());
-            for (size_t off = 0x30; off <= 0x50; off += 8)
-            {
-                if (SDK::safeReadString(base + off, host) && !host.empty())
-                {
-                    break;
-                }
-            }
-            inter.setTransferHost(host);
-            SDK::Log::log("[Network] Server Transferring to: {}", host.empty() ? "new host" : host);
-        }
-
-        // Flush any queued injected packets on this live network thread
-        if (netId && cb)
-        {
-            inter.flushInbound(netId, cb);
-        }
-
-        // Harvest DataItem vtables from entity spawn packets (once only).
-        if (!inter.m_dataItemsHarvested.load(std::memory_order_relaxed))
-        {
-            if (pktId == SDK::PacketID::ADD_ACTOR)
-            {
-                SDK::Crash::g_lastCheckpoint.store("trapInbound: harvestDataItems ADD_ACTOR");
-                SDK::AddActorPacket* addActor = static_cast<SDK::AddActorPacket*>(pkt.get());
-                if (addActor)
-                {
-                    inter.harvestDataItems(&addActor->entityData.items);
-                }
-            }
-            else if (pktId == SDK::PacketID::ADD_PLAYER)
-            {
-                SDK::Crash::g_lastCheckpoint.store("trapInbound: harvestDataItems ADD_PLAYER");
-                SDK::AddPlayerPacket* addPlayer = static_cast<SDK::AddPlayerPacket*>(pkt.get());
-                if (addPlayer)
-                {
-                    inter.harvestDataItems(&addPlayer->entityData.items);
-                }
-            }
-        }
-
-        // Feed into the pipeline.
-        SDK::Crash::g_lastCheckpoint.store("trapInbound: Pipeline::process");
-        Pipeline::get().process(ctx);
-        shouldDrop = ctx.dropped;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+
+    if (idx < kMaxId && self)
     {
-        SDK::Log::log("[Inbound] Exception during packet processing for ID=0x{:02x}!", static_cast<uint8_t>(pktId));
+        inter.m_dispatchers[idx] = self;
     }
+
+    // Network connection state tracking and logging (cached by pointer to avoid overhead on every packet)
+    if (netId && netId != inter.m_lastCheckedNetId.load(std::memory_order_relaxed))
+    {
+        inter.m_lastCheckedNetId.store(netId, std::memory_order_relaxed);
+        if (SDK::Memory::read(netId, inter.m_savedNetIdBuffer, sizeof(inter.m_savedNetIdBuffer)))
+        {
+            inter.m_lastNetId.store(inter.m_savedNetIdBuffer, std::memory_order_release);
+        }
+        else
+        {
+            inter.m_lastNetId.store(netId, std::memory_order_relaxed);
+        }
+
+        std::string curAddr = formatNetId(netId);
+        if (!curAddr.empty() && curAddr != inter.getConnectedServer())
+        {
+            {
+                std::unique_lock lock(inter.m_netInfoMutex);
+                inter.m_connectedServer = curAddr;
+                inter.m_transferHost.clear();
+            }
+            SDK::Log::log("[Network] Connected to server: {}", curAddr);
+        }
+    }
+
+    if (pktId == SDK::PacketID::DISCONNECT)
+    {
+        std::string oldAddr = inter.getConnectedServer();
+        SDK::Log::log("[Network] Disconnected from server: {}", oldAddr.empty() ? "Server" : oldAddr);
+        inter.resetSession();
+    }
+    else if (pktId == SDK::PacketID::TRANSFER)
+    {
+        std::string host;
+        const uint8_t* base = reinterpret_cast<const uint8_t*>(pkt.get());
+        for (size_t off = 0x30; off <= 0x50; off += 8)
+        {
+            if (SDK::safeReadString(base + off, host) && !host.empty())
+            {
+                break;
+            }
+        }
+        inter.setTransferHost(host);
+        SDK::Log::log("[Network] Server Transferring to: {}", host.empty() ? "new host" : host);
+    }
+
+    // Flush any queued injected packets on this live network thread
+    if (netId && cb)
+    {
+        inter.flushInbound(netId, cb);
+    }
+
+    // Harvest DataItem vtables from entity spawn packets (once only).
+    if (!inter.m_dataItemsHarvested.load(std::memory_order_relaxed))
+    {
+        if (pktId == SDK::PacketID::ADD_ACTOR)
+        {
+            SDK::Crash::g_lastCheckpoint.store("trapInbound: harvestDataItems ADD_ACTOR");
+            SDK::AddActorPacket* addActor = static_cast<SDK::AddActorPacket*>(pkt.get());
+            if (addActor)
+            {
+                inter.harvestDataItems(&addActor->entityData.items);
+            }
+        }
+        else if (pktId == SDK::PacketID::ADD_PLAYER)
+        {
+            SDK::Crash::g_lastCheckpoint.store("trapInbound: harvestDataItems ADD_PLAYER");
+            SDK::AddPlayerPacket* addPlayer = static_cast<SDK::AddPlayerPacket*>(pkt.get());
+            if (addPlayer)
+            {
+                inter.harvestDataItems(&addPlayer->entityData.items);
+            }
+        }
+    }
+
+    // Feed into the pipeline.
+    PacketContext ctx{PacketDirection::Inbound, pkt.get()};
+    SDK::Crash::g_lastCheckpoint.store("trapInbound: Pipeline::process");
+    Pipeline::get().process(ctx);
+    bool shouldDrop = ctx.dropped;
 
     if (shouldDrop)
     {
@@ -269,14 +277,7 @@ void PacketInterceptor::trapInbound(void* self, void* netId, void* cb, std::shar
     if (trampoline)
     {
         SDK::Crash::g_lastCheckpoint.store("trapInbound: calling trampoline");
-        __try
-        {
-            trampoline(self, netId, cb, pkt);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            SDK::Log::log("[Inbound] Exception in dispatcher trampoline for ID=0x{:02x}!", static_cast<uint8_t>(pktId));
-        }
+        callTrampolineSafe(trampoline, self, netId, cb, pkt);
         SDK::Crash::g_lastCheckpoint.store("trapInbound: trampoline complete");
     }
 }
@@ -297,34 +298,27 @@ static bool processOutbound(SDK::Packet* pkt)
     bool shouldDrop = false;
     PacketContext ctx{PacketDirection::Outbound, pkt};
 
-    __try
-    {
-        SDK::PacketID pktId = pkt->getID();
-        SDK::Crash::g_lastOutboundPacketId.store(static_cast<uint32_t>(pktId));
-        SDK::Crash::g_lastCheckpoint.store("processOutbound: Pipeline::process");
+    SDK::PacketID pktId = safeGetPacketId(pkt);
+    SDK::Crash::g_lastOutboundPacketId.store(static_cast<uint32_t>(pktId));
+    SDK::Crash::g_lastCheckpoint.store("processOutbound: Pipeline::process");
 
-        uint8_t rawId = static_cast<uint8_t>(pktId);
-        Pipeline::get().process(ctx);
-        shouldDrop = ctx.dropped;
-        if (shouldDrop)
+    uint8_t rawId = static_cast<uint8_t>(pktId);
+    Pipeline::get().process(ctx);
+    shouldDrop = ctx.dropped;
+    if (shouldDrop)
+    {
+        if (!ctx.dropReason.empty())
         {
-            if (!ctx.dropReason.empty())
-            {
-                SDK::Log::log("[Outbound] [0x{:02x}] {:20s} DROPPED ({})", rawId, getPacketName(pktId), ctx.dropReason);
-            }
-            else
-            {
-                SDK::Log::log("[Outbound] [0x{:02x}] {:20s} DROPPED", rawId, getPacketName(pktId));
-            }
+            SDK::Log::log("[Outbound] [0x{:02x}] {:20s} DROPPED ({})", rawId, getPacketName(pktId), ctx.dropReason);
         }
-        else if (pktId == SDK::PacketID::COMMAND_REQUEST || pktId == SDK::PacketID::TEXT)
+        else
         {
-            SDK::Log::log("[Outbound] [0x{:02x}] {:20s} PASSED to server", rawId, getPacketName(pktId));
+            SDK::Log::log("[Outbound] [0x{:02x}] {:20s} DROPPED", rawId, getPacketName(pktId));
         }
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    else if (pktId == SDK::PacketID::COMMAND_REQUEST || pktId == SDK::PacketID::TEXT)
     {
-        SDK::Log::log("[Outbound] Exception in processOutbound!");
+        SDK::Log::log("[Outbound] [0x{:02x}] {:20s} PASSED to server", rawId, getPacketName(pktId));
     }
 
     t_isProcessing = false;
@@ -334,11 +328,14 @@ static bool processOutbound(SDK::Packet* pkt)
 void PacketInterceptor::trapSendToServer(SDK::PacketSender* sender, SDK::Packet* pkt)
 {
     PacketInterceptor& inter = PacketInterceptor::get();
+    TrapGuard guard(inter.m_activeTraps);
+
+    SendFn orig = s_origSendToServer.load(std::memory_order_acquire);
     if (inter.m_uninstalled.load(std::memory_order_acquire))
     {
-        if (sender && pkt && s_origSendToServer)
+        if (sender && pkt && orig)
         {
-            s_origSendToServer(sender, pkt);
+            orig(sender, pkt);
         }
         return;
     }
@@ -348,18 +345,11 @@ void PacketInterceptor::trapSendToServer(SDK::PacketSender* sender, SDK::Packet*
         return;
     }
 
-    TrapGuard guard(inter.m_activeTraps);
     SDK::Crash::g_lastCheckpoint.store("trapSendToServer: calling s_origSendToServer");
-    __try
+    orig = s_origSendToServer.load(std::memory_order_acquire);
+    if (orig)
     {
-        if (s_origSendToServer)
-        {
-            s_origSendToServer(sender, pkt);
-        }
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-        SDK::Log::log("[Outbound] Exception in s_origSendToServer!");
+        orig(sender, pkt);
     }
     SDK::Crash::g_lastCheckpoint.store("trapSendToServer: complete");
 }
@@ -371,8 +361,8 @@ void PacketInterceptor::trapSendToServer(SDK::PacketSender* sender, SDK::Packet*
 bool PacketInterceptor::install()
 {
     m_uninstalled.store(false, std::memory_order_seq_cst);
-    m_outboundHooked = false;
-    s_origSendToServer = nullptr;
+    m_outboundHooked.store(false, std::memory_order_release);
+    s_origSendToServer.store(nullptr, std::memory_order_release);
 
     constexpr uint32_t kScanPackets = 200;
 
@@ -449,62 +439,59 @@ bool PacketInterceptor::install()
 
 bool PacketInterceptor::hookSender(SDK::PacketSender* sender)
 {
-    if (!sender || m_outboundHooked)
+    if (!sender || m_outboundHooked.load(std::memory_order_acquire))
     {
-        return m_outboundHooked;
+        return m_outboundHooked.load(std::memory_order_relaxed);
     }
 
-    __try
+    uintptr_t* vtable = nullptr;
+    if (!SDK::Memory::read(sender, &vtable, sizeof(vtable)) || !vtable)
     {
-        uintptr_t* vtable = *reinterpret_cast<uintptr_t**>(sender);
-        if (!vtable)
-        {
-            SDK::Log::log("[PacketInterceptor] hookSender: bad vtable pointer");
-            return false;
-        }
-
-        // In LoopbackPacketSender vtable:
-        // [0] ~PacketSender()
-        // [1] send(Packet*) - short thunk (calls sendToServer)
-        // [2] sendToServer(Packet*) - target function for all outbound packets
-        void* sendFn = reinterpret_cast<void*>(vtable[1]);
-        void* sendToSrvFn = reinterpret_cast<void*>(vtable[2]);
-        SDK::Log::log("[PacketInterceptor] PacketSender vtable: send @ {:#x}, sendToServer @ {:#x}",
-            reinterpret_cast<uintptr_t>(sendFn), reinterpret_cast<uintptr_t>(sendToSrvFn));
-
-        if (!sendToSrvFn)
-        {
-            SDK::Log::log("[PacketInterceptor] hookSender: null vtable slot [2]");
-            return false;
-        }
-
-        MH_STATUS s = MH_CreateHook(
-            sendToSrvFn,
-            reinterpret_cast<void*>(&trapSendToServer),
-            reinterpret_cast<void**>(&s_origSendToServer)
-        );
-
-        if (s == MH_OK)
-        {
-            MH_EnableHook(sendToSrvFn);
-            SDK::Log::log("[PacketInterceptor] Hooked sendToServer @ {:#x}", reinterpret_cast<uintptr_t>(sendToSrvFn));
-            m_outboundHooked = true;
-            return true;
-        }
-        else if (s == MH_ERROR_ALREADY_CREATED)
-        {
-            m_outboundHooked = true;
-            return true;
-        }
-        else
-        {
-            SDK::Log::log("[PacketInterceptor] hookSender: MH_CreateHook failed with status={}", static_cast<int>(s));
-            return false;
-        }
+        SDK::Log::log("[PacketInterceptor] hookSender: bad vtable pointer");
+        return false;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+
+    // In LoopbackPacketSender vtable:
+    // [0] ~PacketSender()
+    // [1] send(Packet*) - short thunk (calls sendToServer)
+    // [2] sendToServer(Packet*) - target function for all outbound packets
+    void* sendFn = nullptr;
+    void* sendToSrvFn = nullptr;
+    SDK::Memory::read(&vtable[1], &sendFn, sizeof(sendFn));
+    SDK::Memory::read(&vtable[2], &sendToSrvFn, sizeof(sendToSrvFn));
+
+    SDK::Log::log("[PacketInterceptor] PacketSender vtable: send @ {:#x}, sendToServer @ {:#x}",
+        reinterpret_cast<uintptr_t>(sendFn), reinterpret_cast<uintptr_t>(sendToSrvFn));
+
+    if (!sendToSrvFn)
     {
-        SDK::Log::log("[PacketInterceptor] hookSender: exception in hookSender!");
+        SDK::Log::log("[PacketInterceptor] hookSender: null vtable slot [2]");
+        return false;
+    }
+
+    void* origTrampoline = nullptr;
+    MH_STATUS s = MH_CreateHook(
+        sendToSrvFn,
+        reinterpret_cast<void*>(&trapSendToServer),
+        &origTrampoline
+    );
+
+    if (s == MH_OK)
+    {
+        s_origSendToServer.store(reinterpret_cast<SendFn>(origTrampoline), std::memory_order_release);
+        MH_EnableHook(sendToSrvFn);
+        SDK::Log::log("[PacketInterceptor] Hooked sendToServer @ {:#x}", reinterpret_cast<uintptr_t>(sendToSrvFn));
+        m_outboundHooked.store(true, std::memory_order_release);
+        return true;
+    }
+    else if (s == MH_ERROR_ALREADY_CREATED)
+    {
+        m_outboundHooked.store(true, std::memory_order_release);
+        return true;
+    }
+    else
+    {
+        SDK::Log::log("[PacketInterceptor] hookSender: MH_CreateHook failed with status={}", static_cast<int>(s));
         return false;
     }
 }
@@ -518,11 +505,11 @@ void PacketInterceptor::uninstall()
     m_uninstalled.store(true, std::memory_order_seq_cst);
     MH_DisableHook(MH_ALL_HOOKS);
 
-    for (int i = 0; i < 20 && m_activeTraps.load(std::memory_order_acquire) > 0; ++i)
+    for (int i = 0; i < 50 && m_activeTraps.load(std::memory_order_acquire) > 0; ++i)
     {
         ::Sleep(10);
     }
-    ::Sleep(20); // Margin for CPU instruction pipelines and returning frames
+    ::Sleep(50); // Margin for CPU instruction pipelines and returning frames
 
     MH_RemoveHook(MH_ALL_HOOKS);
     MH_Uninitialize();
@@ -531,8 +518,8 @@ void PacketInterceptor::uninstall()
     m_lastCb.store(nullptr, std::memory_order_relaxed);
     m_clientCb.store(nullptr, std::memory_order_relaxed);
     m_clientVtable.store(nullptr, std::memory_order_relaxed);
-    m_outboundHooked = false;
-    s_origSendToServer = nullptr;
+    m_outboundHooked.store(false, std::memory_order_release);
+    s_origSendToServer.store(nullptr, std::memory_order_release);
 
     {
         std::lock_guard<std::mutex> lk(s_heldMutex);
@@ -607,36 +594,39 @@ void PacketInterceptor::dispatchInboundDirect(std::shared_ptr<SDK::Packet> pkt, 
         return;
     }
 
-    __try
+    PacketInterceptor& inter = PacketInterceptor::get();
+    SDK::PacketID pktId = safeGetPacketId(pkt.get());
+    const std::size_t idx = static_cast<std::size_t>(
+        static_cast<std::underlying_type_t<SDK::PacketID>>(pktId));
+
+    void* dispatcher = (idx < kMaxId) ? inter.m_dispatchers[idx] : nullptr;
+    if (!dispatcher && pkt->handler)
     {
-        PacketInterceptor& inter = PacketInterceptor::get();
-        const std::size_t idx = static_cast<std::size_t>(
-            static_cast<std::underlying_type_t<SDK::PacketID>>(pkt->getID()));
+        dispatcher = pkt->handler;
+    }
+    if (!dispatcher)
+    {
+        SDK::Log::log("[Inbound Direct] Failed: no dispatcher for ID=0x{:02x}", idx);
+        return;
+    }
 
-        void* dispatcher = (idx < kMaxId) ? inter.m_dispatchers[idx] : nullptr;
-        if (!dispatcher && pkt->handler)
-        {
-            dispatcher = pkt->handler;
-        }
-        if (!dispatcher)
-        {
-            SDK::Log::log("[Inbound Direct] Failed: no dispatcher for ID=0x{:02x}", idx);
-            return;
-        }
+    void* clientCb = inter.m_clientCb.load(std::memory_order_acquire);
+    void* clientVt = inter.m_clientVtable.load(std::memory_order_acquire);
+    if (!clientCb || !clientVt)
+    {
+        return;
+    }
 
-        void* clientCb = inter.m_clientCb.load(std::memory_order_acquire);
-        void* clientVt = inter.m_clientVtable.load(std::memory_order_acquire);
-        if (!clientCb || !clientVt)
-        {
-            return;
-        }
-
-        void* cb = nullptr;
-        if (liveCb && *reinterpret_cast<void**>(liveCb) == clientVt)
-        {
-            cb = liveCb;
-        }
-        else if (*reinterpret_cast<void**>(clientCb) == clientVt)
+    void* cb = nullptr;
+    void* liveVt = nullptr;
+    if (liveCb && SDK::Memory::read(liveCb, &liveVt, sizeof(liveVt)) && liveVt == clientVt)
+    {
+        cb = liveCb;
+    }
+    else
+    {
+        void* storedVt = nullptr;
+        if (SDK::Memory::read(clientCb, &storedVt, sizeof(storedVt)) && storedVt == clientVt)
         {
             cb = clientCb;
         }
@@ -644,40 +634,28 @@ void PacketInterceptor::dispatchInboundDirect(std::shared_ptr<SDK::Packet> pkt, 
         {
             return;
         }
+    }
 
-        void* netId = liveNetId ? liveNetId : inter.m_lastNetId.load(std::memory_order_relaxed);
-        if (!netId)
+    void* netId = liveNetId ? liveNetId : inter.m_lastNetId.load(std::memory_order_relaxed);
+    if (!netId)
+    {
+        return;
+    }
+
+    // Keep packet alive in a ring buffer so Minecraft's UI tasks don't experience a use-after-free
+    {
+        std::lock_guard<std::mutex> lk(s_heldMutex);
+        s_heldInbound.push_back(pkt);
+        if (s_heldInbound.size() > 64)
         {
-            return;
-        }
-
-        // Keep packet alive in a ring buffer so Minecraft's UI tasks don't experience a use-after-free
-        {
-            std::lock_guard<std::mutex> lk(s_heldMutex);
-            s_heldInbound.push_back(pkt);
-            if (s_heldInbound.size() > 64)
-            {
-                s_heldInbound.pop_front();
-            }
-        }
-
-        HandleFn trampoline = (idx < kMaxId) ? inter.m_byIdTrampolines[idx] : nullptr;
-
-        if (trampoline)
-        {
-            __try
-            {
-                trampoline(dispatcher, netId, cb, pkt);
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER)
-            {
-                SDK::Log::log("[Inbound Direct] Exception in trampoline for packet 0x{:02x}!", idx);
-            }
+            s_heldInbound.pop_front();
         }
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+
+    HandleFn trampoline = (idx < kMaxId) ? inter.m_byIdTrampolines[idx] : nullptr;
+    if (trampoline)
     {
-        SDK::Log::log("[Inbound Direct] Exception in dispatchInboundDirect!");
+        callTrampolineSafe(trampoline, dispatcher, netId, cb, pkt);
     }
 }
 
@@ -692,51 +670,59 @@ void PacketInterceptor::harvestDataItems(const void* synchedActorDataVec)
         return;
     }
 
-    __try
+    uintptr_t vec[2]{};
+    if (!SDK::Memory::read(synchedActorDataVec, vec, sizeof(vec)))
     {
-        const uintptr_t* vec = reinterpret_cast<const uintptr_t*>(synchedActorDataVec);
-        if (!vec[0] || !vec[1] || vec[1] <= vec[0])
+        return;
+    }
+
+    if (!vec[0] || !vec[1] || vec[1] <= vec[0])
+    {
+        return;
+    }
+
+    size_t bytes = vec[1] - vec[0];
+    if (bytes > 8192)
+    {
+        return;
+    }
+
+    size_t count = bytes / 8;
+    for (size_t i = 0; i < count; ++i)
+    {
+        uintptr_t elemPtr = 0;
+        if (!SDK::Memory::read(reinterpret_cast<const void*>(vec[0] + i * sizeof(uintptr_t)), &elemPtr, sizeof(elemPtr)))
         {
-            return;
+            break;
         }
 
-        const uintptr_t* elements = reinterpret_cast<const uintptr_t*>(vec[0]);
-        size_t bytes = vec[1] - vec[0];
-        if (bytes > 8192)
+        if (elemPtr > 0x10000)
         {
-            return;
-        }
-
-        size_t count = bytes / 8;
-        for (size_t i = 0; i < count; ++i)
-        {
-            uint8_t* obj = reinterpret_cast<uint8_t*>(elements[i]);
-            if (obj > reinterpret_cast<uint8_t*>(0x10000))
+            SDK::DataItem itemHeader{};
+            if (SDK::Memory::read(reinterpret_cast<const void*>(elemPtr), &itemHeader, sizeof(itemHeader)))
             {
-                SDK::DataItem* item = reinterpret_cast<SDK::DataItem*>(obj);
-                if (item->type < 16 && !m_dataItemVtables[item->type])
+                if (itemHeader.type < 16 && !m_dataItemVtables[itemHeader.type])
                 {
-                    m_dataItemVtables[item->type] = item->vtable;
+                    m_dataItemVtables[itemHeader.type] = itemHeader.vtable;
                     SDK::Log::log("[PacketInterceptor] Harvested DataItem type {} vtable = {:#x}",
-                        item->type, reinterpret_cast<uintptr_t>(item->vtable));
+                        itemHeader.type, reinterpret_cast<uintptr_t>(itemHeader.vtable));
                 }
             }
         }
+    }
 
-        uint32_t harvestedCount = 0;
-        for (size_t i = 0; i < 16; ++i)
+    uint32_t harvestedCount = 0;
+    for (size_t i = 0; i < 16; ++i)
+    {
+        if (m_dataItemVtables[i])
         {
-            if (m_dataItemVtables[i])
-            {
-                ++harvestedCount;
-            }
-        }
-        if (harvestedCount >= 6)
-        {
-            m_dataItemsHarvested.store(true, std::memory_order_release);
+            ++harvestedCount;
         }
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {}
+    if (harvestedCount >= 6)
+    {
+        m_dataItemsHarvested.store(true, std::memory_order_release);
+    }
 }
 
 std::string PacketInterceptor::getConnectedServer() const

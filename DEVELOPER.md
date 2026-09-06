@@ -66,7 +66,7 @@ BedrockUtils operates as an in-process Man-in-the-Middle (MITM) DLL dynamically 
 1. **Non-Intrusive Runtime Hooking**: Network interception is achieved through lightweight virtual table and function hooks using MinHook. Specifically, the client hooks `LoopbackPacketSender::sendToServer` for outbound traffic and the engine dispatcher for inbound traffic.
 2. **Self-Registering Modules**: Modules are completely decoupled. By using the `REGISTER_MODULE(ClassName)` macro, a module registers itself into the global `ModuleRegistry` during static initialization before the client starts up.
 3. **Server-Agnostic Foundation**: Core systems such as the pipeline, command dispatcher, and base SDK contain zero hardcoded server logic or server-specific heuristics. Universal categories and generic hooks ensure the codebase runs identically across singleplayer worlds, Realms, and custom servers.
-4. **Resilient Memory Protection**: Because Minecraft Bedrock uses structured exception handling and custom memory allocators, all packet reads and critical hooks are guarded by structured exception handling (`__try` and `__except`) to guarantee client stability.
+4. **Resilient Memory Protection**: Because Minecraft Bedrock uses structured exception handling and custom memory allocators, all raw memory probes are isolated into pure POD leaf functions (`SafeMem.h`), allowing the entire codebase to compile cleanly under standard `/EHsc` with guaranteed C++ object stack unwinding.
 
 [Back to Top](#quick-navigation)
 

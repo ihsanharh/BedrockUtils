@@ -188,16 +188,21 @@ bool CommandDispatcher::dispatch(std::string_view rawInput)
         args.args.push_back(std::move(arg));
     }
 
-    __try
+    try
     {
         if (cmd.callback)
         {
             cmd.callback(args);
         }
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    catch (const std::exception& ex)
     {
-        SDK::Log::log("[CommandDispatcher] Handled exception executing command: {}{}", kPrefix, lowerCmd);
+        SDK::Log::log("[CommandDispatcher] Handled exception executing command {}{}: {}", kPrefix, lowerCmd, ex.what());
+        SDK::Chat::error(std::format("An error occurred executing {}{}", kPrefix, lowerCmd));
+    }
+    catch (...)
+    {
+        SDK::Log::log("[CommandDispatcher] Handled unknown exception executing command {}{}", kPrefix, lowerCmd);
         SDK::Chat::error(std::format("An error occurred executing {}{}", kPrefix, lowerCmd));
     }
 
@@ -226,11 +231,9 @@ void CommandDispatcher::handleOutboundChat(TypedPacketContext<SDK::TextPacket>& 
         if (isCommandPrefix(trimmed))
         {
             SDK::Log::log("[CommandDispatcher] Outbound chat command candidate: '{}'", trimmed);
-            if (dispatch(trimmed))
-            {
-                ctx.drop("Executed client command from chat");
-                return;
-            }
+            ctx.drop("Executed client command from chat");
+            dispatch(trimmed);
+            return;
         }
     }
 }

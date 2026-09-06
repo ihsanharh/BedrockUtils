@@ -11,6 +11,29 @@ enum class PacketDirection
     Outbound
 };
 
+inline SDK::PacketID safeGetPacketId(const SDK::Packet* p) noexcept
+{
+    if (!p)
+    {
+        return SDK::PacketID::NONE;
+    }
+
+    __try
+    {
+        void** vtable = *reinterpret_cast<void***>(const_cast<SDK::Packet*>(p));
+        if (!vtable)
+        {
+            return SDK::PacketID::NONE;
+        }
+
+        return p->getID();
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return SDK::PacketID::NONE;
+    }
+}
+
 struct PacketContext
 {
     PacketDirection dir = PacketDirection::Inbound;
@@ -30,25 +53,7 @@ struct PacketContext
 
     SDK::PacketID id() const noexcept
     {
-        if (!packet)
-        {
-            return SDK::PacketID::NONE;
-        }
-
-        __try
-        {
-            void** vtable = *reinterpret_cast<void***>(packet);
-            if (!vtable)
-            {
-                return SDK::PacketID::NONE;
-            }
-
-            return packet->getID();
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            return SDK::PacketID::NONE;
-        }
+        return safeGetPacketId(packet);
     }
 
     void drop(std::string_view reason = "") noexcept
@@ -89,8 +94,11 @@ struct TypedPacketContext
 {
     PacketDirection dir = PacketDirection::Inbound;
     T* packet = nullptr;
-    bool dropped = false;
-    std::string dropReason{};
+    bool& dropped;
+    std::string& dropReason;
+
+    TypedPacketContext(PacketDirection d, T* p, bool& dr, std::string& reason)
+        : dir(d), packet(p), dropped(dr), dropReason(reason) {}
 
     void drop(std::string_view reason = "") noexcept
     {

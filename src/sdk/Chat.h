@@ -4,20 +4,20 @@
 #include "sdk/Game.h"
 #include "sdk/Logger.h"
 #include "sdk/packets/TextPacket.h"
+#include <deque>
 #include <format>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 
 namespace SDK::Chat
 {
 
-// Injects an inbound raw TextPacket directly into the local client chat receiver
-inline void send(std::string_view message)
+// Injects an inbound single-line raw TextPacket directly into the local client chat receiver
+inline void sendSingleLine(std::string_view message)
 {
-    SDK::Log::log("[Chat] {}", message);
-
-    if (!SDK::Game::player() || !PacketInterceptor::get().hasClientHandler())
+    if (!PacketInterceptor::get().hasClientHandler())
     {
         return;
     }
@@ -40,12 +40,39 @@ inline void send(std::string_view message)
     PacketInterceptor::get().injectInbound(pkt);
 }
 
+// Injects an inbound raw TextPacket directly into the local client chat receiver
+inline void send(std::string_view message)
+{
+    size_t start = 0;
+    while (start < message.size())
+    {
+        size_t end = message.find('\n', start);
+        std::string_view line = (end == std::string_view::npos)
+            ? message.substr(start)
+            : message.substr(start, end - start);
+
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.remove_suffix(1);
+        }
+
+        if (!line.empty())
+        {
+            sendSingleLine(line);
+        }
+
+        if (end == std::string_view::npos)
+        {
+            break;
+        }
+        start = end + 1;
+    }
+}
+
 // Injects an inbound chat TextPacket formatted with an author name (<author> message)
 inline void sendChat(std::string_view author, std::string_view message)
 {
-    SDK::Log::log("[Chat] <{}> {}", author, message);
-
-    if (!SDK::Game::player() || !PacketInterceptor::get().hasClientHandler())
+    if (!PacketInterceptor::get().hasClientHandler())
     {
         return;
     }
@@ -96,6 +123,18 @@ inline bool sendToServer(std::string_view message)
 
     SDK::Log::log("[Chat] Sending outbound TextPacket to server: \"{}\" (author=\"{}\", xuid=\"{}\")",
         message, tp->sourceName.view(), tp->xuid.view());
+
+    // Keep packet alive in ring buffer so background network tasks don't experience a use-after-free
+    static std::deque<std::shared_ptr<Packet>> s_heldOutbound;
+    static std::mutex s_heldOutboundMutex;
+    {
+        std::lock_guard<std::mutex> lk(s_heldOutboundMutex);
+        s_heldOutbound.push_back(pkt);
+        if (s_heldOutbound.size() > 32)
+        {
+            s_heldOutbound.pop_front();
+        }
+    }
 
     sender->sendToServer(tp);
     return true;

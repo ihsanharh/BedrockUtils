@@ -65,6 +65,37 @@ static std::vector<Byte> parse(std::string_view pattern)
     return out;
 }
 
+static uintptr_t scanRaw(const uint8_t* mem, size_t limit, const Byte* patData, size_t patSize) noexcept
+{
+    __try
+    {
+        for (size_t i = 0; i <= limit; ++i)
+        {
+            bool ok = true;
+
+            for (size_t j = 0; j < patSize; ++j)
+            {
+                if (!patData[j].wild && mem[i + j] != patData[j].val)
+                {
+                    ok = false;
+                    break;
+                }
+            }
+
+            if (ok)
+            {
+                return reinterpret_cast<uintptr_t>(mem + i);
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+
+    return 0;
+}
+
 uintptr_t scan(uintptr_t base, size_t size, std::string_view pattern)
 {
     const std::vector<Byte> pat = parse(pattern);
@@ -75,32 +106,16 @@ uintptr_t scan(uintptr_t base, size_t size, std::string_view pattern)
     }
     
     const uint8_t* mem = reinterpret_cast<const uint8_t*>(base);
-    
-    for (size_t i = 0, lim = size - pat.size(); i <= lim; ++i)
-    {
-        bool ok = true;
-
-        for (size_t j = 0; j < pat.size(); ++j)
-        {
-            if (!pat[j].wild && mem[i + j] != pat[j].val)
-            {
-                ok = false;
-                break;
-            }
-        }
-        
-        if (ok)
-        {
-            return base + i;
-        }
-    }
-
-    return 0;
+    return scanRaw(mem, size - pat.size(), pat.data(), pat.size());
 }
 
 uintptr_t find(const char* moduleName, std::string_view pattern)
 {
-    HMODULE hMod = GetModuleHandleA(moduleName);
+    HMODULE hMod = moduleName ? GetModuleHandleA(moduleName) : nullptr;
+    if (!hMod)
+    {
+        hMod = GetModuleHandleA(nullptr);
+    }
 
     if (!hMod)
     {
@@ -124,6 +139,11 @@ uintptr_t find(const char* moduleName, std::string_view pattern)
 
 uintptr_t resolveRel32(uintptr_t instrAddr, int relOffset, int instrSize)
 {
+    if (!instrAddr)
+    {
+        return 0;
+    }
+
     int32_t rel = *reinterpret_cast<const int32_t*>(instrAddr + relOffset);
     return static_cast<uintptr_t>(static_cast<intptr_t>(instrAddr) + instrSize + rel);
 }

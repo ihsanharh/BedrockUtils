@@ -3,6 +3,7 @@
 #include "sdk/Chat.h"
 #include "sdk/Logger.h"
 #include "sdk/SafeString.h"
+#include "sdk/SafeMem.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -76,12 +77,8 @@ void PacketDumper::checkPacket(const PacketContext& ctx)
     const bool matchAny = m_anyDirection.load(std::memory_order_relaxed);
     const PacketDirection targetDir = m_targetDirection.load(std::memory_order_relaxed);
 
-    uint8_t currentId = 0;
-    __try
-    {
-        currentId = static_cast<uint8_t>(ctx.packet->getID());
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    uint8_t currentId = static_cast<uint8_t>(ctx.id());
+    if (currentId == 0)
     {
         return;
     }
@@ -117,25 +114,7 @@ static bool isPrintableAscii(char c) noexcept
 
 static bool isReadableMemoryRange(const void* ptr, size_t size)
 {
-    __try
-    {
-        if (!ptr || size == 0)
-        {
-            return false;
-        }
-
-        const volatile char* p = reinterpret_cast<const volatile char*>(ptr);
-        for (size_t i = 0; i < size; ++i)
-        {
-            char dummy = p[i];
-            (void)dummy;
-        }
-        return true;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-        return false;
-    }
+    return SDK::Memory::isValidReadPtr(ptr, size);
 }
 
 std::string PacketDumper::dumpPacketMemory(const PacketContext& ctx, size_t maxBytes)
@@ -219,42 +198,54 @@ std::string PacketDumper::dumpPacketMemory(const PacketContext& ctx, size_t maxB
     // 1. Scan for std::string / SafeString structures (32 bytes aligned to 8)
     for (size_t off = 0x30; off + 32 <= validBytes; off += 8)
     {
-        __try
+        SafeString s{};
+        if (!SDK::Memory::read(base + off, &s, sizeof(s)))
         {
-            const SafeString* s = reinterpret_cast<const SafeString*>(base + off);
-            size_t size = s->size;
-            size_t cap = s->res;
+            continue;
+        }
 
-            // SSO check (size <= 15, cap == 15, valid printable or Minecraft string)
-            if (cap == 15 && size <= 15)
+        size_t size = s.size;
+        size_t cap = s.res;
+
+        // SSO check (size <= 15, cap == 15, valid printable or Minecraft string)
+        if (cap == 15 && size <= 15)
+        {
+            if (size > 0 && s.buf[size] == '\0')
             {
-                if (size > 0 && s->buf[size] == '\0')
+                bool printable = true;
+                for (size_t k = 0; k < size; ++k)
                 {
-                    bool printable = true;
-                    for (size_t k = 0; k < size; ++k)
+                    if (static_cast<unsigned char>(s.buf[k]) < 32 && s.buf[k] != '\n' && s.buf[k] != '\r')
                     {
-                        if (static_cast<unsigned char>(s->buf[k]) < 32 && s->buf[k] != '\n' && s->buf[k] != '\r')
-                        {
-                            printable = false;
-                            break;
-                        }
-                    }
-                    if (printable)
-                    {
-                        std::string_view sv(s->buf, size);
-                        ss << std::format("  [+0x{:04x}] std::string (SSO, len={}, cap={}): \"{}\"\n", off, size, cap, sv);
+                        printable = false;
+                        break;
                     }
                 }
+                if (printable)
+                {
+                    std::string_view sv(s.buf, size);
+                    ss << std::format("  [+0x{:04x}] std::string (SSO, len={}, cap={}): \"{}\"\n", off, size, cap, sv);
+                }
             }
-            // Heap-allocated string check
-            else if (cap >= size && size > 0 && size <= 32768 && cap <= 65536)
+        }
+        // Heap-allocated string check
+        else if (cap >= size && size > 0 && size <= 32768 && cap <= 65536)
+        {
+            if (isReadableMemoryRange(s.ptr, size + 1))
             {
-                if (isReadableMemoryRange(s->ptr, size + 1) && s->ptr[size] == '\0')
+                char nullTerm = '\0';
+                if (SDK::Memory::read(s.ptr + size, &nullTerm, 1) && nullTerm == '\0')
                 {
                     bool printable = true;
                     for (size_t k = 0; k < size; ++k)
                     {
-                        if (static_cast<unsigned char>(s->ptr[k]) < 32 && s->ptr[k] != '\n' && s->ptr[k] != '\r' && s->ptr[k] != '\t')
+                        char ch = 0;
+                        if (!SDK::Memory::read(s.ptr + k, &ch, 1))
+                        {
+                            printable = false;
+                            break;
+                        }
+                        if (static_cast<unsigned char>(ch) < 32 && ch != '\n' && ch != '\r' && ch != '\t')
                         {
                             printable = false;
                             break;
@@ -262,21 +253,20 @@ std::string PacketDumper::dumpPacketMemory(const PacketContext& ctx, size_t maxB
                     }
                     if (printable)
                     {
-                        std::string_view sv(s->ptr, size);
+                        std::string_view sv(s.ptr, size);
                         ss << std::format("  [+0x{:04x}] std::string (HEAP, len={}, cap={}): \"{}\"\n", off, size, cap, sv);
                     }
                 }
             }
         }
-        __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
     // 2. Scan for 3D coordinates (3 sequential floats)
     for (size_t off = 0x30; off + 12 <= validBytes; off += 4)
     {
-        __try
+        float f[3]{};
+        if (SDK::Memory::read(base + off, f, sizeof(f)))
         {
-            const float* f = reinterpret_cast<const float*>(base + off);
             float x = f[0];
             float y = f[1];
             float z = f[2];
@@ -293,7 +283,6 @@ std::string PacketDumper::dumpPacketMemory(const PacketContext& ctx, size_t maxB
                 }
             }
         }
-        __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
     // 3. Scan for variant discriminant tags (single byte at +0x20 relative to string or variant boundary)
