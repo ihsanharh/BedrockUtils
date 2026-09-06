@@ -55,8 +55,10 @@ private:
 
 #define REGISTER_MODULE(Type) \
     namespace { \
-        static const bool s_reg_##Type = []() { \
-            ModuleRegistry::registerModuleFactory(#Type, []() -> std::unique_ptr<Module> { \
+        static const bool s_reg_##Type = []() \
+        { \
+            ModuleRegistry::registerModuleFactory(#Type, []() -> std::unique_ptr<Module> \
+            { \
                 return std::make_unique<Type>(); \
             }); \
             return true; \

@@ -128,7 +128,8 @@ bool CommandManager::cancelPending(std::string_view command)
 {
     std::lock_guard<std::recursive_mutex> lk(m_mutex);
     std::string base = extractBaseCommand(command);
-    std::deque<CommandRequest>::iterator it = std::remove_if(m_pendingQueue.begin(), m_pendingQueue.end(), [&](const CommandRequest& r) {
+    std::deque<CommandRequest>::iterator it = std::remove_if(m_pendingQueue.begin(), m_pendingQueue.end(), [&](const CommandRequest& r)
+    {
         return extractBaseCommand(r.command) == base;
     });
     if (it != m_pendingQueue.end())
